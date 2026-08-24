@@ -1,6 +1,6 @@
 # 🎓 Moodle 4.x Scraper & Extractor de Teoría (ITU UNCUYO)
 
-Un scraper modular, robusto y automatizado en **Python 3.10+** diseñado específicamente para la plataforma **Moodle 4.x** (ITU UNCUYO: `https://aulas.itu.uncu.edu.ar/itu/`).
+Un scraper modular, robusto y automatizado en **Python 3.10+** diseñado específicamente para la plataforma **Moodle 4.x** 
 
 Permite descargar automáticamente todos los recursos de estudio (PDFs, presentaciones PPTX, documentos Word DOCX, hojas de cálculo, archivos comprimidos ZIP y carpetas completas) y extraer todo el texto, teoría explicativa, etiquetas y páginas teóricas a archivos **Markdown (.md)** perfectamente estructurados por temas y unidades.
 
@@ -60,7 +60,7 @@ downloads/
 ### 2. Clonar / Descargar el Proyecto
 Asegúrese de estar en el directorio del proyecto:
 ```bash
-cd "c:\Alvaro\Moodle Scraper"
+cd "c:\TuNombre\MoodleScraper"
 ```
 
 ### 3. Instalar Dependencias
@@ -131,7 +131,7 @@ python main.py --filter "Hardware"
 ```
 
 ### 5. Parámetros Adicionales de Línea de Comandos
-- `--download-dir "D:/Mis_Materias"`: Especifica una carpeta de destino personalizada.
+- `--download-dir "C:/Mis_Materias"`: Especifica una carpeta de destino personalizada.
 - `--overwrite`: Fuerza la sobreescritura de archivos existentes.
 - `--env "ruta/a/otro.env"`: Carga un archivo `.env` específico.
 - `--conf "ruta/a/config.ini"`: Carga un archivo INI específico.
