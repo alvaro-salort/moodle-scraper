@@ -1,0 +1,13 @@
+[moodle]
+base_url = https://aulas.itu.uncu.edu.ar/itu/
+user = tu_usuario_aqui
+password = tu_contraseña_aqui
+
+[download]
+download_dir = ./downloads
+chunk_size_kb = 8
+overwrite_existing = false
+timeout = 30
+max_retries = 3
+save_section_summaries = true
+save_consolidated_markdown = true

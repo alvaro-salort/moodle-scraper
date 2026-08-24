@@ -1,0 +1,77 @@
+# ================================================================
+# SEGURIDAD Y CREDENCIALES (NUNCA SUBIR A GITHUB)
+# ================================================================
+.env
+.env.local
+.env.*.local
+*.env
+scraper.conf
+config.ini
+moodle.conf
+secrets.json
+*.secrets
+
+# ================================================================
+# CARPETA DE DESCARGAS Y ARCHIVOS TEMPORALES
+# ================================================================
+downloads/
+/downloads/
+*.part
+*.tmp
+*.temp
+*.log
+
+# ================================================================
+# ENTORNOS VIRTUALES Y PAQUETES DE PYTHON
+# ================================================================
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+bin/
+lib/
+include/
+
+# ================================================================
+# BYTECODE Y CACHÉ DE PYTHON
+# ================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# ================================================================
+# ARCHIVOS DE SISTEMA OPERATIVO Y EDITORES (IDE)
+# ================================================================
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msm
+*.msp
+*.lnk
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Editores e IDEs
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.spyderproject
+.spyproject
