@@ -3,7 +3,6 @@ Módulo de Descarga: Descargas en streaming de 8KB, resolución de Content-Dispo
 anti-duplicados, reanudación y sanitización de rutas.
 """
 
-import cgi
 import mimetypes
 import os
 import re
