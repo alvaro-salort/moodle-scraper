@@ -138,34 +138,6 @@ python main.py --filter "Hardware"
 
 ---
 
-## 📚 Cursos Mapeados / Compatibles del Plan de Estudio
-
-El scraper detecta y procesa automáticamente todos los cursos del usuario, incluyendo:
-
-1. `2025B - Álgebra y Estadística - Junin/DS`
-2. `2025B - Arquitectura de Hardware Computacional - Junin/DS`
-3. `2025B - Base de Datos Avanzadas - JNN/DS`
-4. `2025B - Base de Datos Relacionales - Junin/DS`
-5. `2025B - Comprensión y Producción de Textos - JNN/DSO`
-6. `2025B - Computación en la Nube - JNN/DS`
-7. `2025B - Desarrollo del Pensamiento y Desempeño de Roles - JNN/DSO`
-8. `2025B - Diseño de Software - JNN/DS`
-9. `2025B - Emprendedurismo - JNN/DSO`
-10. `2025B - Fundamentos de Análisis de Sistemas - Junin/DS`
-11. `2025B - Interpretación de Textos en Inglés - JNN/DS`
-12. `2025B - Introducción a los Sistemas Operativos - JNN/DSO`
-13. `2025B - Introducción al Idioma Inglés - Junin/DS`
-14. `2025B - Legislación de las TIC - JNN/DSO`
-15. `2025B - Lógica Matemática - JNN/DSO`
-16. `2025B - Metodología y Testing - JNN/DS`
-17. `2025B - Modelo de Datos - JNN/DSO`
-18. `2025B - Programación Estructurada - Junin/DS`
-19. `2025B - Programación Orientada a Objetos - JNN/DS`
-20. `2025B - Sistemas Operativos Aplicados - JNN/DS`
-21. `2025B - Sistemas y Paradigmas de Programación - JNN/DSO`
-22. `2025B - Taller de Tecnología - JNN/DSO`
-23. `2025B - Taller de Tecnología Aplicada - JNN/DS`
-
 ---
 
 ## 🧪 Ejecución de Pruebas Unitarias
