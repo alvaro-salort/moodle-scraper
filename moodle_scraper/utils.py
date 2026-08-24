@@ -113,10 +113,33 @@ WINDOWS_RESERVED_NAMES = {
 }
 
 
+def remove_accents(text: str) -> str:
+    """
+    Elimina tildes, diéresis, caracteres diacríticos y convierte la letra ñ/Ñ en n/N.
+    Ejemplo: 'Álgebra y Estadística - Año 2025' -> 'Algebra y Estadistica - Ano 2025'
+    """
+    if not text:
+        return ""
+    
+    # Reemplazo directo para garantizar mapeo exacto de ñ/Ñ y vocales con tilde
+    replacements = {
+        'ñ': 'n', 'Ñ': 'N',
+        'á': 'a', 'é': 'e', 'í': 'i', 'ó': 'o', 'ú': 'u',
+        'Á': 'A', 'É': 'E', 'Í': 'I', 'Ó': 'O', 'Ú': 'U',
+        'ü': 'u', 'Ü': 'U'
+    }
+    for orig, rep in replacements.items():
+        text = text.replace(orig, rep)
+    
+    # Normalización NFKD para cualquier otro carácter diacrítico
+    nfkd = unicodedata.normalize('NFKD', text)
+    return ''.join([c for c in nfkd if not unicodedata.combining(c)])
+
+
 def sanitize_filename(name: str, max_length: int = 150) -> str:
     """
     Sanitiza un nombre de archivo o carpeta para ser 100% compatible con Windows,
-    macOS y Linux, reemplazando caracteres prohibidos y evitando nombres reservados.
+    macOS y Linux, removiendo tildes/ñ, reemplazando caracteres prohibidos y evitando nombres reservados.
     """
     if not name:
         return "sin_nombre"
@@ -124,6 +147,9 @@ def sanitize_filename(name: str, max_length: int = 150) -> str:
     # Decodificar entidades HTML básicas si vinieron en el texto
     name = name.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"').replace("&#039;", "'")
     
+    # Eliminar tildes, acentos y letra ñ/Ñ
+    name = remove_accents(name)
+
     # Reemplazar caracteres prohibidos en sistemas de archivos (Windows: < > : " / \ | ? *)
     sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name)
     

@@ -14,14 +14,22 @@ from moodle_scraper.utils import (
 
 class TestUtils(unittest.TestCase):
 
-    def test_sanitize_forbidden_characters(self):
-        # Caracteres prohibidos en Windows: < > : " / \ | ? *
-        raw = '2025B - Álgebra y Estadística: "Junin/DS" <Tema 1>? *Guía|Doc*'
+    def test_sanitize_forbidden_characters_and_accents(self):
+        # Caracteres prohibidos en Windows y tildes / ñ
+        raw = '2025B - Álgebra y Estadística: "Junin/DS" <Año 1>? *Guía de Diseño | Ñandú*'
         cleaned = sanitize_filename(raw)
         
         for char in ['<', '>', ':', '"', '/', '\\', '|', '?', '*']:
             self.assertNotIn(char, cleaned)
         
+        # Verificar que no queden tildes ni ñ
+        for char in ['á', 'é', 'í', 'ó', 'ú', 'Á', 'É', 'Í', 'Ó', 'Ú', 'ñ', 'Ñ', 'ü', 'Ü']:
+            self.assertNotIn(char, cleaned)
+
+        self.assertIn("Algebra y Estadistica", cleaned)
+        self.assertIn("Ano 1", cleaned)
+        self.assertIn("Guia de Diseno", cleaned)
+        self.assertIn("Nandu", cleaned)
         self.assertTrue(len(cleaned) > 0)
 
     def test_sanitize_windows_reserved_names(self):
