@@ -37,16 +37,21 @@ class ScraperConfig:
     overwrite_existing: bool = False
     save_section_summaries: bool = True
     save_consolidated_markdown: bool = True
+    max_workers: int = 3
+    request_delay: float = 0.0
+    session_cookie: Optional[str] = None
 
     def validate(self) -> list[str]:
         """Valida que los parámetros indispensables estén configurados."""
         errors = []
         if not self.base_url or not self.base_url.startswith(("http://", "https://")):
             errors.append("La URL base de Moodle no es válida o está vacía.")
-        if not self.user:
-            errors.append("El usuario (MOODLE_USER) no está configurado.")
-        if not self.password:
-            errors.append("La contraseña (MOODLE_PASSWORD) no está configurada.")
+        # Si no hay cookie de sesión provista, se requieren usuario y contraseña
+        if not self.session_cookie:
+            if not self.user:
+                errors.append("El usuario (MOODLE_USER) no está configurado.")
+            if not self.password:
+                errors.append("La contraseña (MOODLE_PASSWORD) no está configurada.")
         return errors
 
     @property
@@ -93,6 +98,7 @@ def load_config(
     # 3. Ensamblar valores con precedencia (ENV > CONF > DEFAULT)
     user = os.getenv("MOODLE_USER") or conf_values.get("user") or ""
     password = os.getenv("MOODLE_PASSWORD") or conf_values.get("password") or ""
+    session_cookie = os.getenv("MOODLE_SESSION_COOKIE") or conf_values.get("session_cookie") or None
     
     base_url = (
         os.getenv("MOODLE_BASE_URL")
@@ -112,6 +118,8 @@ def load_config(
     timeout = int(os.getenv("REQUEST_TIMEOUT") or conf_values.get("timeout") or 30)
     max_retries = int(os.getenv("MAX_RETRIES") or conf_values.get("max_retries") or 3)
     chunk_size_kb = int(os.getenv("CHUNK_SIZE_KB") or conf_values.get("chunk_size_kb") or 8)
+    max_workers = int(os.getenv("MAX_WORKERS") or conf_values.get("max_workers") or 3)
+    request_delay = float(os.getenv("REQUEST_DELAY") or conf_values.get("request_delay") or 0.0)
 
     overwrite_existing = _parse_bool(
         os.getenv("OVERWRITE_EXISTING"),
@@ -136,7 +144,10 @@ def load_config(
         chunk_size_kb=chunk_size_kb,
         overwrite_existing=overwrite_existing,
         save_section_summaries=save_section_summaries,
-        save_consolidated_markdown=save_consolidated_markdown
+        save_consolidated_markdown=save_consolidated_markdown,
+        max_workers=max_workers,
+        request_delay=request_delay,
+        session_cookie=session_cookie
     )
 
 

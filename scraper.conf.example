@@ -2,9 +2,12 @@
 base_url = https://aulas.itu.uncu.edu.ar/itu/
 user = tu_usuario_aqui
 password = tu_contraseña_aqui
+# session_cookie = tu_cookie_aqui
 
 [download]
 download_dir = ./downloads
+max_workers = 3
+request_delay = 0.0
 chunk_size_kb = 8
 overwrite_existing = false
 timeout = 30
