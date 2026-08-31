@@ -3,10 +3,10 @@ Orquestador de Procesamiento de Curso: Extrae contenidos, teoría, páginas y de
 """
 
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import requests
-from bs4 import BeautifulSoup
 
 from moodle_scraper.config import ScraperConfig
 from moodle_scraper.downloader import Downloader
@@ -24,6 +24,18 @@ class CourseProcessingStats:
     files_failed: int = 0
     pages_extracted: int = 0
     sections_count: int = 0
+
+
+@dataclass
+class _DownloadJob:
+    """Representa un trabajo de descarga pendiente."""
+    url: str
+    dest_dir: Path
+    fallback_name: str
+    source_info: str
+    target_module: Optional[CourseModule] = None
+    is_direct_resource: bool = False
+    section_name: str = ""
 
 
 class CourseScraper:
@@ -66,8 +78,14 @@ class CourseScraper:
             sec_dir = course_dir / sec.folder_name
             sec_dir.mkdir(parents=True, exist_ok=True)
 
+            download_jobs: List[_DownloadJob] = []
+
             for mod in sec.modules:
-                self._process_module(mod, sec, sec_dir, stats)
+                self._collect_module_jobs(mod, sec, sec_dir, download_jobs, stats)
+
+            # Ejecutar descargas de la sección (secuencial o paralelo según max_workers)
+            if download_jobs:
+                self._execute_download_jobs(download_jobs, stats)
 
             # Guardar resumen del tema si está habilitado
             if self.config.save_section_summaries:
@@ -89,14 +107,15 @@ class CourseScraper:
         )
         return stats
 
-    def _process_module(
+    def _collect_module_jobs(
         self,
         mod: CourseModule,
         section: CourseSection,
         sec_dir: Path,
+        jobs: List[_DownloadJob],
         stats: CourseProcessingStats
     ) -> None:
-        """Procesa una actividad individual según su tipo (recurso, carpeta, página, URL, etc.)."""
+        """Procesa una actividad individual y encola sus descargas necesarias."""
         
         # A) Páginas de contenido (/mod/page/view.php)
         if mod.mod_type == "page" and mod.url:
@@ -137,59 +156,92 @@ class CourseScraper:
                     mod.files.extend(folder_files)
                     
                     for f in folder_files:
-                        success, path, _ = self.downloader.download_file(
-                            f.url,
-                            sec_dir,
+                        jobs.append(_DownloadJob(
+                            url=f.url,
+                            dest_dir=sec_dir,
                             fallback_name=f.name,
-                            source_info=f"Carpeta: {mod.name}"
-                        )
-                        if success:
-                            if "Omitido" in _:
-                                stats.files_skipped += 1
-                            else:
-                                stats.files_downloaded += 1
-                        else:
-                            stats.files_failed += 1
+                            source_info=f"Carpeta: {mod.name}",
+                            target_module=mod,
+                            section_name=section.name
+                        ))
             except Exception as e:
                 Logger.error(f"Error procesando carpeta {mod.name}: {e}")
 
         # D) Recursos directos descargables (/mod/resource/view.php)
         elif mod.mod_type == "resource" and mod.url:
-            success, path, msg = self.downloader.download_file(
-                mod.url,
-                sec_dir,
+            jobs.append(_DownloadJob(
+                url=mod.url,
+                dest_dir=sec_dir,
                 fallback_name=mod.name,
-                source_info=f"Recurso: {mod.name}"
-            )
-            if success:
-                if "Omitido" in msg:
-                    stats.files_skipped += 1
-                else:
-                    stats.files_downloaded += 1
-                if path:
-                    mod.files.append(FileItem(
-                        name=path.name,
-                        url=mod.url,
-                        section_name=section.name,
-                        source_module=mod.name
-                    ))
-            else:
-                stats.files_failed += 1
+                source_info=f"Recurso: {mod.name}",
+                target_module=mod,
+                is_direct_resource=True,
+                section_name=section.name
+            ))
 
         # E) Descargar archivos adjuntos detectados en el DOM (pluginfile.php)
         for f in mod.files:
-            # Evitar re-descargar si ya fue descargado como parte del recurso
             if f.url and f.url != mod.url:
-                success, path, msg = self.downloader.download_file(
-                    f.url,
-                    sec_dir,
+                jobs.append(_DownloadJob(
+                    url=f.url,
+                    dest_dir=sec_dir,
                     fallback_name=f.name,
-                    source_info=f"Adjunto de {mod.name}"
-                )
-                if success:
-                    if "Omitido" in msg:
-                        stats.files_skipped += 1
-                    else:
-                        stats.files_downloaded += 1
-                else:
-                    stats.files_failed += 1
+                    source_info=f"Adjunto de {mod.name}",
+                    target_module=mod,
+                    section_name=section.name
+                ))
+
+    def _execute_download_jobs(self, jobs: List[_DownloadJob], stats: CourseProcessingStats) -> None:
+        """Ejecuta los trabajos de descarga en paralelo o secuencial según la configuración."""
+        workers = max(1, self.config.max_workers)
+
+        def _run_job(job: _DownloadJob) -> Tuple[bool, Optional[Path], str, _DownloadJob]:
+            success, path, msg = self.downloader.download_file(
+                job.url,
+                job.dest_dir,
+                fallback_name=job.fallback_name,
+                source_info=job.source_info
+            )
+            return success, path, msg, job
+
+        if workers > 1 and len(jobs) > 1:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = [executor.submit(_run_job, j) for j in jobs]
+                for future in as_completed(futures):
+                    try:
+                        success, path, msg, job = future.result()
+                        self._handle_download_result(success, path, msg, job, stats)
+                    except Exception as e:
+                        Logger.error(f"Error inesperado en descarga concurrente: {e}")
+                        stats.files_failed += 1
+        else:
+            for job in jobs:
+                success, path, msg, job = _run_job(job)
+                self._handle_download_result(success, path, msg, job, stats)
+
+    def _handle_download_result(
+        self,
+        success: bool,
+        path: Optional[Path],
+        msg: str,
+        job: _DownloadJob,
+        stats: CourseProcessingStats
+    ) -> None:
+        """Actualiza las estadísticas y registra el archivo descargado en su módulo correspondiente."""
+        if success:
+            if "Omitido" in msg:
+                stats.files_skipped += 1
+            else:
+                stats.files_downloaded += 1
+
+            if path and job.is_direct_resource and job.target_module:
+                # Evitar duplicar en la lista de files del módulo
+                if not any(f.name == path.name for f in job.target_module.files):
+                    job.target_module.files.append(FileItem(
+                        name=path.name,
+                        url=job.url,
+                        section_name=job.section_name,
+                        source_module=job.target_module.name
+                    ))
+        else:
+            stats.files_failed += 1
