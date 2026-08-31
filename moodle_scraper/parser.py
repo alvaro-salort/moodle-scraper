@@ -10,7 +10,7 @@ from typing import List, Optional, Dict, Any
 from urllib.parse import urljoin, parse_qs, urlparse
 from bs4 import BeautifulSoup, Tag
 
-from moodle_scraper.utils import sanitize_filename, make_absolute_url, Logger
+from moodle_scraper.utils import sanitize_filename, make_absolute_url, Logger, format_bytes
 
 
 @dataclass
@@ -169,6 +169,124 @@ class MoodleParser:
                         url=full_url
                     ))
         return courses
+
+    @staticmethod
+    def parse_course_contents_from_ajax(json_data: Any, base_url: str) -> List[CourseSection]:
+        """
+        Extrae la estructura completa de secciones y módulos desde el endpoint AJAX de Moodle:
+        core_course_get_contents (lib/ajax/service.php).
+        """
+        sections: List[CourseSection] = []
+        raw_sections = []
+
+        if isinstance(json_data, list):
+            for item in json_data:
+                if isinstance(item, dict) and "data" in item:
+                    inner = item.get("data")
+                    if isinstance(inner, list):
+                        raw_sections = inner
+                        break
+                elif isinstance(item, dict) and ("modules" in item or "section" in item):
+                    raw_sections = json_data
+                    break
+        elif isinstance(json_data, dict):
+            raw_sections = json_data.get("data", [])
+
+        for sec in raw_sections:
+            sec_id = str(sec.get("id", ""))
+            sec_num = int(sec.get("section", 0))
+            sec_name = sec.get("name", "") or f"Tema {sec_num}"
+            summary = sec.get("summary", "") or ""
+            
+            clean_title = re.sub(r'<[^>]+>', '', sec_name).strip() or f"Tema {sec_num}"
+
+            modules: List[CourseModule] = []
+            for m in sec.get("modules", []):
+                mod_id = str(m.get("id", ""))
+                mod_name = m.get("name", "") or f"Actividad_{mod_id}"
+                # Limpiar texto HTML en nombre del módulo
+                clean_mod_name = re.sub(r'<[^>]+>', '', mod_name).strip()
+                mod_type = m.get("modname", "other")
+                mod_url = m.get("url") or ""
+                if mod_url:
+                    mod_url = make_absolute_url(base_url, mod_url)
+                
+                desc = m.get("description", "") or ""
+                clean_desc = re.sub(r'<[^>]+>', '', desc).strip()
+
+                files: List[FileItem] = []
+                for content_file in m.get("contents", []):
+                    f_url = content_file.get("fileurl") or ""
+                    if f_url:
+                        f_url = make_absolute_url(base_url, f_url)
+                        f_name = content_file.get("filename") or f_url.split("/")[-1].split("?")[0]
+                        f_size = content_file.get("filesize")
+                        size_str = format_bytes(f_size) if f_size else None
+                        
+                        files.append(FileItem(
+                            name=f_name,
+                            url=f_url,
+                            size_hint=size_str,
+                            section_name=clean_title,
+                            source_module=clean_mod_name
+                        ))
+
+                modules.append(CourseModule(
+                    id=mod_id,
+                    mod_type=mod_type,
+                    name=clean_mod_name,
+                    url=mod_url if mod_url else None,
+                    description_html=desc,
+                    description_text=clean_desc,
+                    files=files
+                ))
+
+            sections.append(CourseSection(
+                id=sec_id or f"section-{sec_num}",
+                section_number=sec_num,
+                name=clean_title,
+                summary_html=summary,
+                summary_text=re.sub(r'<[^>]+>', '', summary).strip(),
+                modules=modules
+            ))
+
+        return sections
+
+    @staticmethod
+    def extract_section_links_from_html(html: str, base_url: str, course_id: str) -> List[Tuple[int, str, str]]:
+        """
+        Detecta enlaces a pestañas o sub-secciones en formatos multi-página (onetopic, tabs, etc.).
+        Retorna lista de tuplas (numero_seccion, nombre_seccion, url_absoluta).
+        """
+        soup = _create_soup(html)
+        links: List[Tuple[int, str, str]] = []
+        seen_urls = set()
+
+        # Buscar enlaces con parámetro section=\d+ o sectionid=\d+ o tabs de onetopic
+        pattern = re.compile(rf"course/view\.php\?.*id={re.escape(str(course_id))}.*(?:section|sectionid)=\d+", re.IGNORECASE)
+        for a_tag in soup.find_all("a", href=pattern):
+            href = a_tag.get("href", "")
+            full_url = make_absolute_url(base_url, href)
+            if full_url in seen_urls:
+                continue
+            seen_urls.add(full_url)
+            
+            parsed = urlparse(full_url)
+            params = parse_qs(parsed.query)
+            sec_num = 0
+            if "section" in params:
+                try:
+                    sec_num = int(params["section"][0])
+                except ValueError:
+                    pass
+
+            sec_title = a_tag.get_text(" ", strip=True)
+            sec_title = re.sub(r'\s+', ' ', sec_title).strip()
+            links.append((sec_num, sec_title, full_url))
+
+        # Ordenar por número de sección
+        links.sort(key=lambda x: x[0])
+        return links
 
     @staticmethod
     def parse_course_sections(html: str, base_url: str) -> List[CourseSection]:

@@ -170,6 +170,70 @@ class TestParser(unittest.TestCase):
         self.assertEqual(files[0].size_hint, "1.2 MB")
         self.assertEqual(files[1].name, "Ejemplos.zip")
 
+    def test_parse_course_contents_from_ajax(self):
+        ajax_data = [{
+            "data": [
+                {
+                    "id": 501,
+                    "name": "Unidad 1 - Introducción a los Patrones de Diseño",
+                    "section": 1,
+                    "summary": "<p>Objetivos de la unidad</p>",
+                    "modules": [
+                        {
+                            "id": 1001,
+                            "name": "1.1.1 - Introducción a los Patrones de Diseño",
+                            "modname": "page",
+                            "url": "https://aulas.itu.uncu.edu.ar/itu/mod/page/view.php?id=1001",
+                            "contents": []
+                        },
+                        {
+                            "id": 1002,
+                            "name": "1.1.2 - Presentación: Introducción a los Patrones de Diseño",
+                            "modname": "resource",
+                            "url": "https://aulas.itu.uncu.edu.ar/itu/mod/resource/view.php?id=1002",
+                            "contents": [
+                                {
+                                    "filename": "Presentacion_Patrones.pdf",
+                                    "fileurl": "https://aulas.itu.uncu.edu.ar/itu/webservice/pluginfile.php/1002/mod_resource/content/1/Presentacion_Patrones.pdf",
+                                    "filesize": 2048576
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }]
+        base_url = "https://aulas.itu.uncu.edu.ar/itu/"
+        sections = MoodleParser.parse_course_contents_from_ajax(ajax_data, base_url)
+
+        self.assertEqual(len(sections), 1)
+        self.assertEqual(sections[0].name, "Unidad 1 - Introducción a los Patrones de Diseño")
+        self.assertEqual(len(sections[0].modules), 2)
+        
+        mod_pdf = sections[0].modules[1]
+        self.assertEqual(mod_pdf.mod_type, "resource")
+        self.assertEqual(len(mod_pdf.files), 1)
+        self.assertEqual(mod_pdf.files[0].name, "Presentacion_Patrones.pdf")
+        self.assertIn("pluginfile.php", mod_pdf.files[0].url)
+
+    def test_extract_section_links_from_html(self):
+        html = """
+        <div class="onetopic">
+            <ul class="nav nav-tabs">
+                <li class="nav-item"><a class="nav-link" href="https://aulas.itu.uncu.edu.ar/itu/course/view.php?id=45&section=0">General</a></li>
+                <li class="nav-item"><a class="nav-link" href="https://aulas.itu.uncu.edu.ar/itu/course/view.php?id=45&section=1">Unidad 1</a></li>
+                <li class="nav-item"><a class="nav-link" href="https://aulas.itu.uncu.edu.ar/itu/course/view.php?id=45&section=2">Unidad 2</a></li>
+            </ul>
+        </div>
+        """
+        base_url = "https://aulas.itu.uncu.edu.ar/itu/"
+        links = MoodleParser.extract_section_links_from_html(html, base_url, "45")
+
+        self.assertEqual(len(links), 3)
+        self.assertEqual(links[0][0], 0)
+        self.assertEqual(links[1][0], 1)
+        self.assertEqual(links[2][0], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

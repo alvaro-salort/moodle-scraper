@@ -49,6 +49,8 @@ class CourseScraper:
     def process_course(self, course: Course, course_index: int = 0, total_courses: int = 0) -> CourseProcessingStats:
         """
         Ejecuta el pipeline completo de extracción y descarga para un curso.
+        Utiliza API AJAX (core_course_get_contents) para obtener el 100% de pestañas/temas,
+        con fallback a crawling multi-pestaña por HTML.
         """
         stats = CourseProcessingStats()
         Logger.course_header(course.name, course_index, total_courses)
@@ -58,21 +60,73 @@ class CourseScraper:
         course_dir.mkdir(parents=True, exist_ok=True)
         Logger.info(f"Directorio local del curso: {course_dir}")
 
-        # 2. Descargar y parsear la página principal del curso
-        course_view_url = course.url or f"course/view.php?id={course.id}"
-        try:
-            resp = self.session.get(course_view_url)
-            resp.raise_for_status()
-            course_html = resp.text
-        except requests.RequestException as e:
-            Logger.error(f"No se pudo cargar el curso {course.name} ({course_view_url}): {e}")
-            return stats
+        sections: List[CourseSection] = []
 
-        sections = MoodleParser.parse_course_sections(course_html, self.config.base_url)
+        # 2. Estrategia A: API AJAX de Moodle (core_course_get_contents) con sesskey
+        if self.session.sesskey:
+            try:
+                ajax_url = f"lib/ajax/service.php?sesskey={self.session.sesskey}&info=core_course_get_contents"
+                payload = [{
+                    "index": 0,
+                    "methodname": "core_course_get_contents",
+                    "args": {
+                        "courseid": int(course.id)
+                    }
+                }]
+                resp = self.session.post(ajax_url, json=payload)
+                if resp.status_code == 200:
+                    ajax_data = resp.json()
+                    sections = MoodleParser.parse_course_contents_from_ajax(ajax_data, self.config.base_url)
+                    if sections:
+                        total_mods = sum(len(s.modules) for s in sections)
+                        Logger.success(f"Estructura completa obtenida vía API Moodle ({len(sections)} secciones, {total_mods} actividades/recursos)")
+            except Exception as e:
+                Logger.warn(f"No se pudo consultar el servicio AJAX de contenidos: {e}")
+
+        # 3. Estrategia B: Mapeo y Crawling HTML (soporte para pestañas onetopic, sub-páginas y secciones estándar)
+        if not sections:
+            course_view_url = course.url or f"course/view.php?id={course.id}"
+            try:
+                resp = self.session.get(course_view_url)
+                resp.raise_for_status()
+                course_html = resp.text
+            except requests.RequestException as e:
+                Logger.error(f"No se pudo cargar el curso {course.name} ({course_view_url}): {e}")
+                return stats
+
+            # Detectar si el curso está dividido en pestañas o sub-páginas (onetopic / multipage)
+            tab_links = MoodleParser.extract_section_links_from_html(course_html, self.config.base_url, course.id)
+            
+            if len(tab_links) > 1:
+                Logger.info(f"Formato multi-pestaña / multi-sección detectado: {len(tab_links)} pestañas encontradas.")
+                seen_sec_ids = set()
+                
+                # Procesar la página base actual primero
+                base_sections = MoodleParser.parse_course_sections(course_html, self.config.base_url)
+                for s in base_sections:
+                    if s.id not in seen_sec_ids:
+                        seen_sec_ids.add(s.id)
+                        sections.append(s)
+
+                # Visitar cada pestaña adicional
+                for sec_num, sec_title, tab_url in tab_links:
+                    try:
+                        tab_resp = self.session.get(tab_url)
+                        if tab_resp.status_code == 200:
+                            tab_sections = MoodleParser.parse_course_sections(tab_resp.text, self.config.base_url)
+                            for s in tab_sections:
+                                if s.id not in seen_sec_ids:
+                                    seen_sec_ids.add(s.id)
+                                    sections.append(s)
+                    except Exception as e:
+                        Logger.warn(f"No se pudo cargar pestaña {sec_title} ({tab_url}): {e}")
+            else:
+                sections = MoodleParser.parse_course_sections(course_html, self.config.base_url)
+
         stats.sections_count = len(sections)
-        Logger.info(f"Secciones detectadas: {len(sections)}")
+        Logger.info(f"Secciones totales a procesar: {len(sections)}")
 
-        # 3. Recorrer secciones, procesar actividades y descargar archivos
+        # 4. Recorrer secciones, procesar actividades y descargar archivos
         for sec in sections:
             Logger.section(sec.name)
             sec_dir = course_dir / sec.folder_name
@@ -92,12 +146,12 @@ class CourseScraper:
                 summary_path = sec_dir / "resumen_tema.md"
                 CourseMarkdownWriter.generate_section_summary(course, sec, summary_path)
 
-        # 4. Guardar archivo consolidado de teoría del curso completo
+        # 5. Guardar archivo consolidado de teoría del curso completo
         if self.config.save_consolidated_markdown:
             consolidated_path = course_dir / "notas_y_teoria_completa.md"
             CourseMarkdownWriter.generate_consolidated_markdown(course, sections, consolidated_path)
 
-        # 5. Reporte de resumen del curso
+        # 6. Reporte de resumen del curso
         Logger.info(
             f"Resumen de curso '{course.name}': "
             f"{stats.files_downloaded} descargados, "
@@ -118,7 +172,7 @@ class CourseScraper:
         """Procesa una actividad individual y encola sus descargas necesarias."""
         
         # A) Páginas de contenido (/mod/page/view.php)
-        if mod.mod_type == "page" and mod.url:
+        if mod.mod_type == "page" and mod.url and not mod.content_html:
             try:
                 page_resp = self.session.get(mod.url)
                 if page_resp.status_code == 200:
@@ -131,7 +185,7 @@ class CourseScraper:
                 Logger.warn(f"No se pudo obtener el contenido de la página {mod.name}: {e}")
 
         # B) Enlaces externos (/mod/url/view.php)
-        elif mod.mod_type == "url" and mod.url:
+        elif mod.mod_type == "url" and mod.url and not mod.external_url:
             try:
                 url_resp = self.session.get(mod.url)
                 if url_resp.status_code == 200:
@@ -143,7 +197,7 @@ class CourseScraper:
                 Logger.warn(f"No se pudo resolver URL externa {mod.name}: {e}")
 
         # C) Carpetas con múltiples archivos (/mod/folder/view.php)
-        elif mod.mod_type == "folder" and mod.url:
+        elif mod.mod_type == "folder" and mod.url and not mod.files:
             try:
                 folder_resp = self.session.get(mod.url)
                 if folder_resp.status_code == 200:
@@ -167,8 +221,8 @@ class CourseScraper:
             except Exception as e:
                 Logger.error(f"Error procesando carpeta {mod.name}: {e}")
 
-        # D) Recursos directos descargables (/mod/resource/view.php)
-        elif mod.mod_type == "resource" and mod.url:
+        # D) Recursos directos descargables (/mod/resource/view.php) sin archivos listados
+        elif mod.mod_type == "resource" and mod.url and not mod.files:
             jobs.append(_DownloadJob(
                 url=mod.url,
                 dest_dir=sec_dir,
@@ -179,14 +233,14 @@ class CourseScraper:
                 section_name=section.name
             ))
 
-        # E) Descargar archivos adjuntos detectados en el DOM (pluginfile.php)
+        # E) Descargar archivos adjuntos / contenidos directos detectados
         for f in mod.files:
-            if f.url and f.url != mod.url:
+            if f.url:
                 jobs.append(_DownloadJob(
                     url=f.url,
                     dest_dir=sec_dir,
                     fallback_name=f.name,
-                    source_info=f"Adjunto de {mod.name}",
+                    source_info=f"Archivo de {mod.name}",
                     target_module=mod,
                     section_name=section.name
                 ))
