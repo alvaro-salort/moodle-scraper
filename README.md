@@ -11,9 +11,17 @@ Permite descargar automáticamente todos los recursos de estudio (PDFs, presenta
 - 🔐 **Autenticación Moodle 4.x Segura:**
   - Extracción automática de token CSRF (`logintoken`) previo al `POST` de login.
   - Persistencia de cookies con `requests.Session` y obtención de clave de sesión (`sesskey`).
+  - **Soporte de Cookie de Sesión Directa (`MoodleSession`):** Permite conectarse directamente en entornos que utilizan Single Sign-On (Google Workspace, Microsoft 365 / Entra ID) o Captcha.
 - 🧭 **Mapeo Inteligente de Cursos:**
   - Detección rápida mediante el WebService AJAX de Moodle (`core_course_get_enrolled_courses_by_timeline_classification`), `my/courses.php` y `my/`.
   - Menú interactivo para seleccionar cursos individuales (`1`), listas/rangos (`1,3,5` o `1-4`), o todos con `a`.
+- ⚡ **Descargas Concurrentes y Streaming de Alto Rendimiento:**
+  - **Pool de Descargas Paralelas (`ThreadPoolExecutor`):** Descarga múltiples archivos simultáneamente con control de hilos concurrentes (`--workers`).
+  - **Motor de Parseo `lxml` Ultrarrápido:** Extracción del árbol DOM 5x-10x más rápida con tolerancia a HTML mal formado.
+  - **Cortesía de Red y Rate Limiting:** Control de retardo (`--delay`) y reintentos adaptativos para proteger el servidor de la universidad.
+  - Descarga en bloques de 8KB (`stream=True`) con archivos temporales `.part` para evitar corrupciones.
+  - Resolución inteligente de nombres reales mediante cabeceras `Content-Disposition` (RFC 5987 / RFC 2616), URLs redirigidas y `Content-Type`.
+  - **Mecanismo Anti-Duplicados:** Omite descargas de archivos existentes con el mismo tamaño para reanudación instantánea sin consumo innecesario de ancho de banda.
 - 📝 **Extracción Completa de Texto y Teoría a Markdown:**
   - **Títulos de sección:** Nombres limpios de cada unidad o tema.
   - **Etiquetas y avisos (`mod_label`):** Explicaciones de los profesores, notas y advertencias.
@@ -21,12 +29,8 @@ Permite descargar automáticamente todos los recursos de estudio (PDFs, presenta
   - **Enlaces externos (`mod_url`):** Enlaces web y descripciones asociadas.
   - **Consolidado General (`notas_y_teoria_completa.md`):** Todo el curso en un solo documento con índice y enlaces.
   - **Resumen por tema (`resumen_tema.md`):** Contenido textual específico dentro de cada carpeta de tema.
-- ⚡ **Descargas Resilientes en Streaming:**
-  - Descarga en bloques de 8KB (`stream=True`) con archivos temporales `.part` para evitar corrupciones.
-  - Resolución inteligente de nombres reales mediante cabeceras `Content-Disposition` (RFC 5987 / RFC 2616), URLs redirigidas y `Content-Type`.
-  - **Mecanismo Anti-Duplicados:** Omite descargas de archivos existentes con el mismo tamaño para reanudación instantánea sin consumo innecesario de ancho de banda.
-- 🛡 **Sanitización Total de Archivos:** Compatible al 100% con Windows (`\ / : * ? " < > |`), Linux y macOS.
-- 🎨 **Consola Enriquecida:** Colores, estados claros y métricas detalladas de descarga.
+- 🛡 **Sanitización Total de Archivos:** Compatible al 100% con Windows (`\ / : * ? " < > |`), Linux y macOS (incluyendo soporte UTF-8 seguro para consolas Windows).
+- 🎨 **Consola Enriquecida:** Colores, estados claros y métricas detalladas de descarga en tiempo real.
 
 ---
 
@@ -60,7 +64,7 @@ downloads/
 ### 2. Clonar / Descargar el Proyecto
 Asegúrese de estar en el directorio del proyecto:
 ```bash
-cd "c:\TuNombre\MoodleScraper"
+cd "c:\Alvaro\Moodle Scraper"
 ```
 
 ### 3. Instalar Dependencias
@@ -86,11 +90,18 @@ Edite el archivo `.env` con sus credenciales de Moodle ITU UNCUYO:
 MOODLE_USER=tu_usuario_moodle
 MOODLE_PASSWORD=tu_contraseña_moodle
 
+# O bien usar Cookie de Sesión (para SSO de Google/Microsoft)
+# MOODLE_SESSION_COOKIE=tu_cookie_aqui
+
 # URL Base del Moodle
 MOODLE_BASE_URL=https://aulas.itu.uncu.edu.ar/itu/
 
 # Directorio de descarga local
 DOWNLOAD_DIR=./downloads
+
+# Concurrencia y optimizaciones
+MAX_WORKERS=3
+REQUEST_DELAY=0.0
 
 # Opciones avanzadas
 OVERWRITE_EXISTING=false
@@ -131,8 +142,11 @@ python main.py --filter "Hardware"
 ```
 
 ### 5. Parámetros Adicionales de Línea de Comandos
+- `-w`, `--workers 4`: Define el número de descargas simultáneas en paralelo (por defecto: `3`).
+- `--delay 0.5`: Añade una pausa de cortesía en segundos entre peticiones para proteger el servidor.
+- `--cookie "valor_moodlesession"`: Autentica directamente mediante cookie de sesión (evita login con credenciales / SSO).
 - `--download-dir "C:/Mis_Materias"`: Especifica una carpeta de destino personalizada.
-- `--overwrite`: Fuerza la sobreescritura de archivos existentes.
+- `--overwrite`: Fuerza la sobreescritura de archivos locales existentes.
 - `--env "ruta/a/otro.env"`: Carga un archivo `.env` específico.
 - `--conf "ruta/a/config.ini"`: Carga un archivo INI específico.
 
