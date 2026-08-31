@@ -61,7 +61,8 @@ class TestParser(unittest.TestCase):
         self.assertEqual(len(courses), 2)
         self.assertEqual(courses[0].id, "201")
         self.assertEqual(courses[0].name, "2025B - Base de Datos Relacionales - Junin/DS")
-        self.assertEqual(courses[1].id, "2025B - Programación Orientada a Objetos - JNN/DS")
+        self.assertEqual(courses[1].id, "202")
+        self.assertEqual(courses[1].name, "2025B - Programación Orientada a Objetos - JNN/DS")
 
     def test_parse_course_sections_and_modules(self):
         html = """

@@ -73,6 +73,14 @@ class Course:
         return sanitize_filename(self.name)
 
 
+def _create_soup(html: str) -> BeautifulSoup:
+    """Crea una instancia de BeautifulSoup utilizando lxml (más rápido y tolerante) con fallback a html.parser."""
+    try:
+        return BeautifulSoup(html, "lxml")
+    except Exception:
+        return BeautifulSoup(html, "html.parser")
+
+
 class MoodleParser:
     """Colección de métodos para parsear el HTML y respuestas de Moodle 4.x."""
 
@@ -81,7 +89,7 @@ class MoodleParser:
         """
         Extrae la lista de cursos desde páginas HTML como my/courses.php, my/ o el menú principal.
         """
-        soup = BeautifulSoup(html, "html.parser")
+        soup = _create_soup(html)
         courses: Dict[str, Course] = {}
 
         # 1. Buscar enlaces con patrón /course/view.php?id=X
@@ -168,19 +176,31 @@ class MoodleParser:
         Parsea la vista principal de un curso (course/view.php?id=X)
         extrayendo todas las secciones, etiquetas, textos, páginas, recursos y enlaces.
         """
-        soup = BeautifulSoup(html, "html.parser")
+        soup = _create_soup(html)
         sections: List[CourseSection] = []
 
         # Buscar contenedores de secciones en Moodle 4.x / 3.x
-        # Moodle 4.x: li.course-section, div.course-section, li.section.main, ul.topics > li, ul.weeks > li
-        section_elems = soup.find_all(
+        candidates = soup.find_all(
             ["li", "div", "section"],
-            class_=re.compile(r"section\s+main|course-section|sectionname|topics|weeks")
+            class_=re.compile(r"\bsection\s+main\b|\bcourse-section\b|\bsection\b")
         )
+
+        section_elems = []
+        for cand in candidates:
+            cand_classes = cand.get("class", [])
+            # Evitar elementos internos que contengan subcadenas como 'sectionname', 'summary' o 'activity'
+            if any(c in ["sectionname", "summary", "section-summary", "activity", "activityinstance", "contentwithoutlink"] for c in cand_classes):
+                continue
+            # Evitar anidados si su elemento padre ya es una sección candidata
+            if not any(parent in candidates and parent != cand for parent in cand.parents):
+                section_elems.append(cand)
 
         # Si no encontró con la clase principal, buscar por IDs tipo section-0, section-1, etc.
         if not section_elems:
-            section_elems = soup.find_all(["li", "div", "section"], id=re.compile(r"section-\d+"))
+            candidates_id = soup.find_all(["li", "div", "section"], id=re.compile(r"^section-\d+$"))
+            for cand in candidates_id:
+                if not any(parent in candidates_id and parent != cand for parent in cand.parents):
+                    section_elems.append(cand)
 
         # Si aún está vacío, usar el contenedor de contenido general
         if not section_elems:
@@ -236,10 +256,16 @@ class MoodleParser:
             )
 
             # 3. Extraer actividades y recursos dentro de la sección
-            activities = sec_node.find_all(
+            raw_activities = sec_node.find_all(
                 ["li", "div"],
-                class_=re.compile(r"activity\s+|activity-item|activityinstance")
+                class_=re.compile(r"\bactivity\s+|\bactivity\b|\bactivity-item\b|\bmodtype_\w+")
             )
+
+            # Filtrar actividades anidadas para evitar duplicaciones
+            activities = []
+            for act in raw_activities:
+                if not any(parent in raw_activities and parent != act for parent in act.parents):
+                    activities.append(act)
 
             for act in activities:
                 mod = MoodleParser._parse_activity_element(act, base_url, section_title)
@@ -343,7 +369,7 @@ class MoodleParser:
         """
         Extrae el contenido textual y HTML de un recurso tipo 'Página' (/mod/page/view.php).
         """
-        soup = BeautifulSoup(html, "html.parser")
+        soup = _create_soup(html)
         
         # En Moodle 4.x, el contenido suele estar en .box.py-3.generalbox o .page-content o #region-main
         content_box = (
@@ -373,7 +399,7 @@ class MoodleParser:
         Extrae los archivos contenidos dentro de una carpeta (/mod/folder/view.php).
         También busca el botón o formulario para descargar el .ZIP completo.
         """
-        soup = BeautifulSoup(html, "html.parser")
+        soup = _create_soup(html)
         files: List[FileItem] = []
 
         # 1. Comprobar si hay botón para descargar carpeta completa en .zip (download_folder.php)
@@ -421,7 +447,7 @@ class MoodleParser:
         """
         Extrae el enlace de destino real desde la vista /mod/url/view.php.
         """
-        soup = BeautifulSoup(html, "html.parser")
+        soup = _create_soup(html)
         
         # Buscar enlace en workaround o botón 'haga clic aquí'
         url_div = soup.find(class_=re.compile(r"urlworkaround"))

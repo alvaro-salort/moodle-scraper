@@ -13,6 +13,14 @@ from moodle_scraper.parser import Course, CourseSection, CourseModule, FileItem
 from moodle_scraper.utils import Logger
 
 
+def _create_soup(html: str) -> BeautifulSoup:
+    """Crea una instancia de BeautifulSoup utilizando lxml (más veloz) con fallback a html.parser."""
+    try:
+        return BeautifulSoup(html, "lxml")
+    except Exception:
+        return BeautifulSoup(html, "html.parser")
+
+
 class MarkdownFormatter:
     """Convierte fragmentos de HTML de Moodle a texto Markdown limpio y formateado."""
 
@@ -22,7 +30,7 @@ class MarkdownFormatter:
         if not html_str or not html_str.strip():
             return ""
 
-        soup = BeautifulSoup(html_str, "html.parser")
+        soup = _create_soup(html_str)
         
         # Eliminar elementos no deseados
         for tag in soup(["script", "style", "meta", "noscript", "svg"]):
