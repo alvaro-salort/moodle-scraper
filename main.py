@@ -60,6 +60,24 @@ def parse_arguments() -> argparse.Namespace:
         action="store_true",
         help="Sobreescribir archivos locales aunque ya existan"
     )
+    parser.add_argument(
+        "-w", "--workers",
+        type=int,
+        default=None,
+        help="Número de descargas simultáneas en paralelo (por defecto: 3)"
+    )
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=None,
+        help="Retardo en segundos entre solicitudes HTTP para proteger el servidor (ej: 0.2)"
+    )
+    parser.add_argument(
+        "--cookie",
+        type=str,
+        default=None,
+        help="Cookie de sesión 'MoodleSession' para login directo (bypass de SSO / Google / MS 365)"
+    )
 
     return parser.parse_args()
 
@@ -75,6 +93,12 @@ def main() -> int:
         config.download_dir = Path(args.download_dir).resolve()
     if args.overwrite:
         config.overwrite_existing = True
+    if args.workers is not None:
+        config.max_workers = args.workers
+    if args.delay is not None:
+        config.request_delay = args.delay
+    if args.cookie is not None:
+        config.session_cookie = args.cookie
 
     cli = MoodleCLI(config)
 
