@@ -4,6 +4,7 @@ Maneja cookies persistentes, extracción de logintoken CSRF y obtención de sess
 """
 
 import re
+import time
 import requests
 from typing import Optional, Tuple
 from urllib.parse import urljoin
@@ -13,6 +14,14 @@ from requests.adapters import HTTPAdapter
 
 from moodle_scraper.config import ScraperConfig
 from moodle_scraper.utils import Logger
+
+
+def _create_soup(html: str) -> BeautifulSoup:
+    """Crea un objeto BeautifulSoup prefiriendo lxml (más veloz) con fallback a html.parser."""
+    try:
+        return BeautifulSoup(html, "lxml")
+    except Exception:
+        return BeautifulSoup(html, "html.parser")
 
 
 class MoodleAuthError(Exception):
@@ -30,11 +39,11 @@ class MoodleSession:
         self.is_authenticated: bool = False
         self.user_fullname: Optional[str] = None
 
-        # Configurar reintentos automáticos para errores de red transitorios (500, 502, 503, 504)
+        # Configurar reintentos automáticos para errores de red transitorios (429, 500, 502, 503, 504)
         retries = Retry(
             total=config.max_retries,
             backoff_factor=1.0,
-            status_forcelist=[500, 502, 503, 504],
+            status_forcelist=[429, 500, 502, 503, 504],
             raise_on_status=False
         )
         adapter = HTTPAdapter(max_retries=retries)
@@ -52,6 +61,10 @@ class MoodleSession:
             "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
             "Connection": "keep-alive"
         })
+
+        # Si se proporcionó una cookie de sesión directa, configurarla
+        if self.config.session_cookie:
+            self.session.cookies.set("MoodleSession", self.config.session_cookie)
 
     def _resolve_url(self, endpoint: str) -> str:
         """Construye una URL absoluta a partir de un endpoint relativo."""
@@ -71,7 +84,7 @@ class MoodleSession:
         except requests.RequestException as e:
             raise MoodleAuthError(f"No se pudo conectar a la página de login de Moodle: {e}")
 
-        soup = BeautifulSoup(resp.text, "html.parser")
+        soup = _create_soup(resp.text)
         
         # Buscar input oculto 'logintoken'
         token_input = soup.find("input", {"name": "logintoken"})
@@ -95,16 +108,38 @@ class MoodleSession:
 
     def login(self, username: Optional[str] = None, password: Optional[str] = None) -> bool:
         """
-        Realiza el flujo completo de login contra Moodle 4.x:
-        1. GET login/index.php -> extraer logintoken
-        2. POST login/index.php -> enviar credenciales
-        3. Validar sesión y extraer sesskey del usuario
+        Realiza la autenticación en Moodle 4.x.
+        Soporta tanto inicio de sesión tradicional con credenciales como validación de cookie MoodleSession.
         """
+        # A) Autenticación por cookie de sesión preexistente (SSO / Captcha bypass)
+        if self.config.session_cookie:
+            Logger.info("Validando autenticación con cookie MoodleSession...")
+            try:
+                resp = self.get("my/", allow_redirects=True)
+                resp.raise_for_status()
+            except requests.RequestException as e:
+                raise MoodleAuthError(f"Error de red validando cookie de sesión: {e}")
+
+            if "login/index.php" in resp.url:
+                raise MoodleAuthError("La cookie de sesión (MOODLE_SESSION_COOKIE) es inválida o ha expirado.")
+
+            soup = _create_soup(resp.text)
+            self.sesskey = self._extract_sesskey(resp.text)
+            self.user_fullname = self._extract_user_fullname(soup)
+            self.is_authenticated = True
+
+            user_disp = self.user_fullname or "Sesión SSO"
+            Logger.success(f"Autenticación exitosa mediante cookie! Conectado como: {user_disp}")
+            if self.sesskey:
+                Logger.info(f"Clave de sesión (sesskey) obtenida: {self.sesskey}")
+            return True
+
+        # B) Autenticación tradicional mediante usuario y contraseña
         user = username or self.config.user
         pwd = password or self.config.password
 
         if not user or not pwd:
-            raise MoodleAuthError("Credenciales incompletas. Verifique MOODLE_USER y MOODLE_PASSWORD.")
+            raise MoodleAuthError("Credenciales incompletas. Verifique MOODLE_USER y MOODLE_PASSWORD (o configure MOODLE_SESSION_COOKIE).")
 
         logintoken, anchor = self.extract_logintoken()
 
@@ -130,7 +165,7 @@ class MoodleSession:
             raise MoodleAuthError(f"Error de red durante el intento de login: {e}")
 
         # Comprobar si hubo error en la página devuelta
-        soup = BeautifulSoup(resp.text, "html.parser")
+        soup = _create_soup(resp.text)
         
         # Detección de mensajes de error típicos de Moodle
         error_elem = (
@@ -160,18 +195,18 @@ class MoodleSession:
 
     def _extract_sesskey(self, html_content: str) -> Optional[str]:
         """Extrae el sesskey de configuraciones de Javascript o enlaces en el HTML."""
-        # 1. Buscar en objeto M.cfg de JavaScript
-        match = re.search(r'["\']sesskey["\']\s*:\s*["\']([a-zA-Z0-9]+)["\']', html_content)
+        # 1. Buscar en objeto M.cfg de JavaScript o asignaciones JS
+        match = re.search(r'["\']?sesskey["\']?\s*[:=]\s*["\']([a-zA-Z0-9_-]+)["\']', html_content)
         if match:
             return match.group(1)
         
         # 2. Buscar en enlaces de logout o parámetros url ?sesskey=...
-        match = re.search(r'[?&]sesskey=([a-zA-Z0-9]+)', html_content)
+        match = re.search(r'[?&]sesskey=([a-zA-Z0-9_-]+)', html_content)
         if match:
             return match.group(1)
 
         # 3. Buscar en inputs hidden
-        match = re.search(r'<input[^>]+name=["\']sesskey["\'][^>]+value=["\']([a-zA-Z0-9]+)["\']', html_content)
+        match = re.search(r'<input[^>]+name=["\']sesskey["\'][^>]+value=["\']([a-zA-Z0-9_-]+)["\']', html_content)
         if match:
             return match.group(1)
 
@@ -189,13 +224,17 @@ class MoodleSession:
         return None
 
     def get(self, url_or_endpoint: str, **kwargs) -> requests.Response:
-        """Petición GET envuelta con URL resolution y timeout por defecto."""
+        """Petición GET envuelta con URL resolution, control de retardo y timeout por defecto."""
+        if self.config.request_delay > 0:
+            time.sleep(self.config.request_delay)
         target_url = self._resolve_url(url_or_endpoint)
         kwargs.setdefault("timeout", self.config.timeout)
         return self.session.get(target_url, **kwargs)
 
     def post(self, url_or_endpoint: str, **kwargs) -> requests.Response:
-        """Petición POST envuelta con URL resolution y timeout por defecto."""
+        """Petición POST envuelta con URL resolution, control de retardo y timeout por defecto."""
+        if self.config.request_delay > 0:
+            time.sleep(self.config.request_delay)
         target_url = self._resolve_url(url_or_endpoint)
         kwargs.setdefault("timeout", self.config.timeout)
         return self.session.post(target_url, **kwargs)
