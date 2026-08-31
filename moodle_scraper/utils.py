@@ -26,6 +26,32 @@ except ImportError:
             pass
 
 
+import threading
+
+_log_lock = threading.Lock()
+
+# Intentar habilitar UTF-8 en stdout/stderr en Windows si está soportado
+if sys.platform == "win32":
+    try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
+def _safe_print(msg: str = "", end: str = "\n", flush: bool = True) -> None:
+    """Imprime de forma segura en consola protegiendo contra errores de codificación cp1252 y concurrencia."""
+    with _log_lock:
+        try:
+            print(msg, end=end, flush=flush)
+        except UnicodeEncodeError:
+            encoding = sys.stdout.encoding or "utf-8"
+            safe_msg = msg.encode(encoding, errors="replace").decode(encoding)
+            print(safe_msg, end=end, flush=flush)
+
+
 class Colors:
     """Códigos ANSI de escape para estilos y colores en consola."""
     RESET = "\033[0m"
@@ -56,53 +82,53 @@ class Logger:
     @staticmethod
     def header(title: str) -> None:
         line = "=" * 70
-        print(f"\n{Colors.BOLD}{Colors.CYAN}{line}{Colors.RESET}")
-        print(f"{Colors.BOLD}{Colors.CYAN}  {title.center(66)}  {Colors.RESET}")
-        print(f"{Colors.BOLD}{Colors.CYAN}{line}{Colors.RESET}\n")
+        _safe_print(f"\n{Colors.BOLD}{Colors.CYAN}{line}{Colors.RESET}")
+        _safe_print(f"{Colors.BOLD}{Colors.CYAN}  {title.center(66)}  {Colors.RESET}")
+        _safe_print(f"{Colors.BOLD}{Colors.CYAN}{line}{Colors.RESET}\n")
 
     @staticmethod
     def course_header(course_name: str, index: int = 0, total: int = 0) -> None:
         counter = f" [{index}/{total}]" if total > 0 else ""
-        print(f"\n{Colors.BOLD}{Colors.MAGENTA}┌{'─'*68}┐{Colors.RESET}")
-        print(f"{Colors.BOLD}{Colors.MAGENTA}│ 🎓 CURSO{counter}: {Colors.WHITE}{course_name[:56]:<56}{Colors.MAGENTA}│{Colors.RESET}")
-        print(f"{Colors.BOLD}{Colors.MAGENTA}└{'─'*68}┘{Colors.RESET}")
+        _safe_print(f"\n{Colors.BOLD}{Colors.MAGENTA}┌{'─'*68}┐{Colors.RESET}")
+        _safe_print(f"{Colors.BOLD}{Colors.MAGENTA}│ 🎓 CURSO{counter}: {Colors.WHITE}{course_name[:56]:<56}{Colors.MAGENTA}│{Colors.RESET}")
+        _safe_print(f"{Colors.BOLD}{Colors.MAGENTA}└{'─'*68}┘{Colors.RESET}")
 
     @staticmethod
     def section(name: str) -> None:
-        print(f"\n{Colors.BOLD}{Colors.BLUE}  📁 [SECCIÓN] {name}{Colors.RESET}")
-        print(f"{Colors.DIM}{Colors.BLUE}  {'─' * 60}{Colors.RESET}")
+        _safe_print(f"\n{Colors.BOLD}{Colors.BLUE}  📁 [SECCIÓN] {name}{Colors.RESET}")
+        _safe_print(f"{Colors.DIM}{Colors.BLUE}  {'─' * 60}{Colors.RESET}")
 
     @staticmethod
     def info(msg: str) -> None:
-        print(f"{Colors.CYAN}  ℹ {msg}{Colors.RESET}")
+        _safe_print(f"{Colors.CYAN}  ℹ {msg}{Colors.RESET}")
 
     @staticmethod
     def success(msg: str) -> None:
-        print(f"{Colors.BOLD}{Colors.GREEN}  ✔ {msg}{Colors.RESET}")
+        _safe_print(f"{Colors.BOLD}{Colors.GREEN}  ✔ {msg}{Colors.RESET}")
 
     @staticmethod
     def skip(msg: str) -> None:
-        print(f"{Colors.YELLOW}  ↷ [OMITIDO] {msg}{Colors.RESET}")
+        _safe_print(f"{Colors.YELLOW}  ↷ [OMITIDO] {msg}{Colors.RESET}")
 
     @staticmethod
     def warn(msg: str) -> None:
-        print(f"{Colors.BOLD}{Colors.YELLOW}  ⚠ [AVISO] {msg}{Colors.RESET}")
+        _safe_print(f"{Colors.BOLD}{Colors.YELLOW}  ⚠ [AVISO] {msg}{Colors.RESET}")
 
     @staticmethod
     def error(msg: str) -> None:
-        print(f"{Colors.BOLD}{Colors.RED}  ✖ [ERROR] {msg}{Colors.RESET}")
+        _safe_print(f"{Colors.BOLD}{Colors.RED}  ✖ [ERROR] {msg}{Colors.RESET}")
 
     @staticmethod
     def text_saved(file_name: str) -> None:
-        print(f"{Colors.GREEN}  📝 [TEXTO GUARDADO] {file_name}{Colors.RESET}")
+        _safe_print(f"{Colors.GREEN}  📝 [TEXTO GUARDADO] {file_name}{Colors.RESET}")
 
     @staticmethod
     def download_progress(filename: str, current_kb: float, total_kb: float | None = None) -> None:
         if total_kb and total_kb > 0:
             pct = (current_kb / total_kb) * 100
-            print(f"\r{Colors.CYAN}  ⬇ Descargando {filename}... {current_kb:.1f}KB / {total_kb:.1f}KB ({pct:.1f}%){Colors.RESET}", end="", flush=True)
+            _safe_print(f"\r{Colors.CYAN}  ⬇ Descargando {filename}... {current_kb:.1f}KB / {total_kb:.1f}KB ({pct:.1f}%){Colors.RESET}", end="", flush=True)
         else:
-            print(f"\r{Colors.CYAN}  ⬇ Descargando {filename}... {current_kb:.1f}KB{Colors.RESET}", end="", flush=True)
+            _safe_print(f"\r{Colors.CYAN}  ⬇ Descargando {filename}... {current_kb:.1f}KB{Colors.RESET}", end="", flush=True)
 
 
 # Nombres reservados en el sistema de archivos de Windows
