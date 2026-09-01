@@ -64,7 +64,7 @@ downloads/
 ### 2. Clonar / Descargar el Proyecto
 Asegúrese de estar en el directorio del proyecto:
 ```bash
-cd "c:\Alvaro\Moodle Scraper"
+cd "c:\TuNombre\Moodle Scraper"
 ```
 
 ### 3. Instalar Dependencias
