@@ -6,7 +6,8 @@ Utiliza BeautifulSoup4 para parsear estructuras DOM y la API AJAX de Moodle cuan
 import json
 import re
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any
+from pathlib import Path
+from typing import List, Optional, Dict, Any, Tuple
 from urllib.parse import urljoin, parse_qs, urlparse
 from bs4 import BeautifulSoup, Tag
 
@@ -47,16 +48,35 @@ class CourseSection:
     summary_html: str = ""
     summary_text: str = ""
     modules: List[CourseModule] = field(default_factory=list)
+    parent_name: Optional[str] = None
 
     @property
     def folder_name(self) -> str:
-        """Genera un nombre de carpeta limpio para la sección."""
-        prefix = f"Tema_{self.section_number}_" if self.section_number > 0 else "Tema_0_General_"
+        """Nombre limpio de la carpeta de la sección."""
         clean = sanitize_filename(self.name)
-        # Si ya comienza con prefijo numérico similar, evitar redundancia
-        if clean.lower().startswith("tema") or clean.lower().startswith("sección") or clean.lower().startswith("unidad"):
-            return sanitize_filename(clean)
-        return sanitize_filename(f"{prefix}{clean}")
+        if not clean or clean.lower() in ["sección", "tema", "section"]:
+            return f"Tema_{self.section_number}"
+        return clean
+
+    @property
+    def relative_folder_path(self) -> Path:
+        """Genera la ruta de carpetas relativa respetando la jerarquía padre/hijo (ej: Modulo 1/Clase 2)."""
+        clean_name = self.folder_name
+        if self.parent_name:
+            clean_parent = sanitize_filename(self.parent_name)
+            if clean_parent and clean_parent.lower() != clean_name.lower():
+                return Path(clean_parent) / clean_name
+        return Path(clean_name)
+
+
+@dataclass
+class OnetopicTabInfo:
+    """Información de navegación de una pestaña de Onetopic / Árbol de pestañas."""
+    section_number: int
+    title: str
+    url: str
+    parent_name: Optional[str] = None
+    level: int = 0
 
 
 @dataclass
@@ -289,15 +309,194 @@ class MoodleParser:
         return links
 
     @staticmethod
-    def parse_course_sections(html: str, base_url: str) -> List[CourseSection]:
+    def is_onetopic_course(html: str) -> bool:
+        """Determina si un curso utiliza el formato de pestañas / árbol de pestañas onetopic."""
+        soup = _create_soup(html)
+        if soup.find(id="tabs-tree-start"):
+            return True
+        if soup.find(class_=re.compile(r"onetopic|format-onetopic|format_onetopic")):
+            return True
+        if soup.find("li", class_=re.compile(r"tab_position_\d+|tab_level_\d+|subtopic")):
+            return True
+        return False
+
+    @staticmethod
+    def extract_onetopic_level_0_tabs(html: str, base_url: str, course_id: str) -> List[Dict[str, Any]]:
+        """Extrae pestañas de nivel raíz (nivel 0) en formato onetopic."""
+        soup = _create_soup(html)
+        tabs: List[Dict[str, Any]] = []
+        tabs_container = soup.find(class_=re.compile(r"onetopic|tabs-tree")) or soup
+
+        for li in tabs_container.find_all("li", class_=re.compile(r"tab_level_0|nav-item")):
+            classes = li.get("class", [])
+            if "tab_level_0" not in classes and "tab_position" not in " ".join(classes):
+                continue
+            a = li.find("a")
+            if not a or not a.get("href"):
+                continue
+
+            is_disabled = "disabled" in classes or "dimmed" in classes
+            has_childs = "haschilds" in classes
+
+            for hide in a.find_all(class_=re.compile(r"accesshide|sr-only")):
+                hide.decompose()
+            tab_title = re.sub(r'\s+', ' ', a.get_text(" ", strip=True)).strip()
+
+            full_url = make_absolute_url(base_url, a.get("href"))
+            parsed = urlparse(full_url)
+            params = parse_qs(parsed.query)
+
+            cid = params.get("id", [""])[0]
+            if cid and str(cid) != str(course_id):
+                continue
+
+            sec_num = 0
+            if "section" in params:
+                try:
+                    sec_num = int(params["section"][0])
+                except ValueError:
+                    pass
+
+            tabs.append({
+                "section": sec_num,
+                "title": tab_title,
+                "url": full_url,
+                "haschilds": has_childs,
+                "disabled": is_disabled
+            })
+        return tabs
+
+    @staticmethod
+    def extract_onetopic_level_1_tabs(html: str, base_url: str, parent_title: str) -> List[OnetopicTabInfo]:
+        """Extrae subpestañas hijas (nivel 1 / subtopics) de una pestaña padre en onetopic."""
+        soup = _create_soup(html)
+        sub_tabs: List[OnetopicTabInfo] = []
+        tabs_container = soup.find(class_=re.compile(r"onetopic|tabs-tree")) or soup
+
+        for li in tabs_container.find_all("li", class_=re.compile(r"tab_level_1|subtopic")):
+            classes = li.get("class", [])
+            is_disabled = "disabled" in classes or "dimmed" in classes
+            a = li.find("a")
+            if not a or not a.get("href"):
+                continue
+
+            for hide in a.find_all(class_=re.compile(r"accesshide|sr-only")):
+                hide.decompose()
+            tab_title = re.sub(r'\s+', ' ', a.get_text(" ", strip=True)).strip()
+
+            full_url = make_absolute_url(base_url, a.get("href"))
+            parsed = urlparse(full_url)
+            params = parse_qs(parsed.query)
+            sec_num = 0
+            if "section" in params:
+                try:
+                    sec_num = int(params["section"][0])
+                except ValueError:
+                    pass
+
+            if not is_disabled:
+                sub_tabs.append(OnetopicTabInfo(
+                    section_number=sec_num,
+                    title=tab_title,
+                    url=full_url,
+                    parent_name=parent_title,
+                    level=1
+                ))
+        return sub_tabs
+
+    @staticmethod
+    def parse_course_sections(
+        html: str,
+        base_url: str,
+        target_section_number: Optional[int] = None,
+        section_title: Optional[str] = None,
+        parent_name: Optional[str] = None
+    ) -> List[CourseSection]:
         """
-        Parsea la vista principal de un curso (course/view.php?id=X)
-        extrayendo todas las secciones, etiquetas, textos, páginas, recursos y enlaces.
+        Parsea la vista de un curso extrayendo secciones, etiquetas, textos, páginas, recursos y enlaces.
+        Si se especifica target_section_number, extrae exclusivamente el contenido de esa sección específica.
         """
         soup = _create_soup(html)
         sections: List[CourseSection] = []
 
-        # Buscar contenedores de secciones en Moodle 4.x / 3.x
+        # Caso específico: Se solicita extraer una sección puntual (como en onetopic o páginas individuales)
+        if target_section_number is not None:
+            sec_node = soup.find(["li", "div", "section"], id=f"section-{target_section_number}")
+            if not sec_node:
+                # Si no se encuentra por id exacto, buscar contenedor de sección principal
+                candidates = soup.find_all(
+                    ["li", "div", "section"],
+                    class_=re.compile(r"\bsection\s+main\b|\bcourse-section\b|\bsection\b")
+                )
+                for cand in candidates:
+                    cand_id = cand.get("id", "")
+                    if f"section-{target_section_number}" in cand_id or str(target_section_number) in cand_id:
+                        sec_node = cand
+                        break
+                if not sec_node and candidates:
+                    sec_node = candidates[0]
+
+            if not sec_node:
+                sec_node = soup.find(class_=re.compile(r"course-content|region-main")) or soup
+
+            # Determinar el nombre final de la sección
+            final_title = section_title
+            if not final_title:
+                title_elem = (
+                    sec_node.find(class_=re.compile(r"sectionname|section-title|coursesection-title"))
+                    or sec_node.find(["h3", "h4", "h2"], class_=re.compile(r"section-title|title"))
+                )
+                if title_elem:
+                    final_title = title_elem.get_text(" ", strip=True)
+                else:
+                    # Intentar desde el título de la página
+                    if soup.title and soup.title.string:
+                        page_title = soup.title.string
+                        match_title = re.search(r"Tema:\s*([^|]+)", page_title)
+                        if match_title:
+                            final_title = match_title.group(1).strip()
+            if not final_title:
+                final_title = "General" if target_section_number == 0 else f"Tema {target_section_number}"
+
+            final_title = re.sub(r'\s+', ' ', final_title).strip()
+
+            summary_elem = sec_node.find(class_=re.compile(r"summary|section-summary|summarytext"))
+            summary_html = str(summary_elem) if summary_elem else ""
+            summary_text = summary_elem.get_text("\n", strip=True) if summary_elem else ""
+
+            section_obj = CourseSection(
+                id=f"section-{target_section_number}",
+                section_number=target_section_number,
+                name=final_title,
+                summary_html=summary_html,
+                summary_text=summary_text,
+                modules=[],
+                parent_name=parent_name
+            )
+
+            raw_activities = sec_node.find_all(
+                ["li", "div"],
+                class_=re.compile(r"\bactivity\s+|\bactivity\b|\bactivity-item\b|\bmodtype_\w+")
+            )
+
+            activities = []
+            for act in raw_activities:
+                if not any(parent in raw_activities and parent != act for parent in act.parents):
+                    activities.append(act)
+
+            seen_mod_keys = set()
+            for act in activities:
+                mod = MoodleParser._parse_activity_element(act, base_url, final_title)
+                if mod:
+                    mod_key = mod.url or mod.id or mod.name
+                    if mod_key in seen_mod_keys:
+                        continue
+                    seen_mod_keys.add(mod_key)
+                    section_obj.modules.append(mod)
+
+            return [section_obj]
+
+        # Caso general: Extraer todas las secciones presentes en la página HTML
         candidates = soup.find_all(
             ["li", "div", "section"],
             class_=re.compile(r"\bsection\s+main\b|\bcourse-section\b|\bsection\b")
@@ -306,21 +505,17 @@ class MoodleParser:
         section_elems = []
         for cand in candidates:
             cand_classes = cand.get("class", [])
-            # Evitar elementos internos que contengan subcadenas como 'sectionname', 'summary' o 'activity'
             if any(c in ["sectionname", "summary", "section-summary", "activity", "activityinstance", "contentwithoutlink"] for c in cand_classes):
                 continue
-            # Evitar anidados si su elemento padre ya es una sección candidata
             if not any(parent in candidates and parent != cand for parent in cand.parents):
                 section_elems.append(cand)
 
-        # Si no encontró con la clase principal, buscar por IDs tipo section-0, section-1, etc.
         if not section_elems:
             candidates_id = soup.find_all(["li", "div", "section"], id=re.compile(r"^section-\d+$"))
             for cand in candidates_id:
                 if not any(parent in candidates_id and parent != cand for parent in cand.parents):
                     section_elems.append(cand)
 
-        # Si aún está vacío, usar el contenedor de contenido general
         if not section_elems:
             content_container = soup.find(class_=re.compile(r"course-content|region-main"))
             if content_container:
@@ -331,35 +526,29 @@ class MoodleParser:
 
         for sec_node in section_elems:
             sec_id_attr = sec_node.get("id", "")
-            
-            # Identificar número de sección
             sec_num_match = re.search(r"section-(\d+)", sec_id_attr or "")
             if sec_num_match:
                 section_num = int(sec_num_match.group(1))
             else:
                 section_num = sec_counter
             
-            # Evitar secciones duplicadas por anidamiento de selectores
             sec_key = f"{section_num}_{sec_id_attr}"
             if sec_key in seen_section_ids:
                 continue
             seen_section_ids.add(sec_key)
             sec_counter += 1
 
-            # 1. Extraer título de la sección
             title_elem = (
                 sec_node.find(class_=re.compile(r"sectionname|section-title|coursesection-title"))
                 or sec_node.find(["h3", "h4", "h2"], class_=re.compile(r"section-title|title"))
             )
             if title_elem:
-                section_title = title_elem.get_text(" ", strip=True)
+                sec_title = title_elem.get_text(" ", strip=True)
             else:
-                section_title = "General" if section_num == 0 else f"Tema {section_num}"
+                sec_title = "General" if section_num == 0 else f"Tema {section_num}"
 
-            # Limpiar título
-            section_title = re.sub(r'\s+', ' ', section_title).strip()
+            sec_title = re.sub(r'\s+', ' ', sec_title).strip()
 
-            # 2. Extraer resumen o descripción de la sección
             summary_elem = sec_node.find(class_=re.compile(r"summary|section-summary|summarytext"))
             summary_html = str(summary_elem) if summary_elem else ""
             summary_text = summary_elem.get_text("\n", strip=True) if summary_elem else ""
@@ -367,27 +556,31 @@ class MoodleParser:
             section_obj = CourseSection(
                 id=sec_id_attr or f"section-{section_num}",
                 section_number=section_num,
-                name=section_title,
+                name=sec_title,
                 summary_html=summary_html,
                 summary_text=summary_text,
-                modules=[]
+                modules=[],
+                parent_name=parent_name
             )
 
-            # 3. Extraer actividades y recursos dentro de la sección
             raw_activities = sec_node.find_all(
                 ["li", "div"],
                 class_=re.compile(r"\bactivity\s+|\bactivity\b|\bactivity-item\b|\bmodtype_\w+")
             )
 
-            # Filtrar actividades anidadas para evitar duplicaciones
             activities = []
             for act in raw_activities:
                 if not any(parent in raw_activities and parent != act for parent in act.parents):
                     activities.append(act)
 
+            seen_mod_keys = set()
             for act in activities:
-                mod = MoodleParser._parse_activity_element(act, base_url, section_title)
+                mod = MoodleParser._parse_activity_element(act, base_url, sec_title)
                 if mod:
+                    mod_key = mod.url or mod.id or mod.name
+                    if mod_key in seen_mod_keys:
+                        continue
+                    seen_mod_keys.add(mod_key)
                     section_obj.modules.append(mod)
 
             sections.append(section_obj)
@@ -424,7 +617,7 @@ class MoodleParser:
             or link
         )
         if name_elem:
-            # Remover texto de accesibilidad ("Archivo", "Página", etc.)
+            # Remover texto de accesibilidad ("Archivo", "Página", "Tarea", etc.)
             for hide in name_elem.find_all(class_=re.compile(r"accesshide|sr-only")):
                 hide.decompose()
             name = name_elem.get_text(" ", strip=True)
@@ -445,7 +638,6 @@ class MoodleParser:
             content_html = str(label_content)
             content_text = label_content.get_text("\n", strip=True)
             if not name:
-                # Tomar la primera línea significativa como nombre
                 first_line = [l.strip() for l in content_text.splitlines() if l.strip()]
                 name = first_line[0][:60] if first_line else "Nota / Explicación"
 
@@ -456,6 +648,12 @@ class MoodleParser:
             name = f"Recurso_{mod_type}_{mod_id or 'item'}"
 
         name = re.sub(r'\s+', ' ', name).strip()
+        # Limpiar sufijos residuales de tipo si quedaron pegados
+        name = re.sub(r'\s+Tarea$', '', name, flags=re.IGNORECASE)
+        name = re.sub(r'\s+Archivo$', '', name, flags=re.IGNORECASE)
+        name = re.sub(r'\s+Carpeta$', '', name, flags=re.IGNORECASE)
+        name = re.sub(r'\s+Página$', '', name, flags=re.IGNORECASE)
+        name = re.sub(r'\s+URL$', '', name, flags=re.IGNORECASE)
 
         files: List[FileItem] = []
 
@@ -488,20 +686,15 @@ class MoodleParser:
         Extrae el contenido textual y HTML de un recurso tipo 'Página' (/mod/page/view.php).
         """
         soup = _create_soup(html)
-        
-        # En Moodle 4.x, el contenido suele estar en .box.py-3.generalbox o .page-content o #region-main
         content_box = (
             soup.find(class_=re.compile(r"page-content|generalbox"))
             or soup.find("div", role="main")
             or soup.find(id="region-main")
         )
-        
-        # Título de la página
         title_elem = soup.find(["h2", "h3"], class_=re.compile(r"page-title|title")) or soup.find("h2")
         title = title_elem.get_text(strip=True) if title_elem else ""
 
         if content_box:
-            # Eliminar navegación interna o migas si están dentro
             for nav in content_box.find_all(class_=re.compile(r"activity-navigation|breadcrumb|modified")):
                 nav.decompose()
             return {
@@ -515,45 +708,52 @@ class MoodleParser:
     def parse_folder_files(html: str, base_url: str, section_name: str, module_name: str) -> List[FileItem]:
         """
         Extrae los archivos contenidos dentro de una carpeta (/mod/folder/view.php).
-        También busca el botón o formulario para descargar el .ZIP completo.
+        Extrae todos los archivos individuales (pluginfile.php) y utiliza el ZIP sólo como respaldo.
         """
         soup = _create_soup(html)
         files: List[FileItem] = []
 
-        # 1. Comprobar si hay botón para descargar carpeta completa en .zip (download_folder.php)
-        zip_form = soup.find("form", action=re.compile(r"download_folder\.php"))
-        if zip_form:
-            action_url = make_absolute_url(base_url, zip_form.get("action", ""))
-            # Obtener parámetros del formulario
-            inputs = {inp.get("name"): inp.get("value", "") for inp in zip_form.find_all("input") if inp.get("name")}
-            query_str = "&".join(f"{k}={v}" for k, v in inputs.items())
-            zip_url = f"{action_url}?{query_str}" if query_str else action_url
-            
-            files.append(FileItem(
-                name=f"{sanitize_filename(module_name)}.zip",
-                url=zip_url,
-                section_name=section_name,
-                source_module=module_name
-            ))
-            return files
+        # 1. Extraer archivos individuales dentro del árbol de la carpeta
+        tree = (
+            soup.find(class_=re.compile(r"foldertree|generalbox"))
+            or soup.find("div", role="main")
+            or soup.find(id="region-main")
+            or soup
+        )
+        for a_tag in tree.find_all("a", href=re.compile(r"pluginfile\.php")):
+            href = a_tag.get("href", "")
+            file_url = make_absolute_url(base_url, href)
+            file_name = a_tag.get_text(strip=True)
+            if not file_name or "." not in file_name:
+                file_name = file_url.split("/")[-1].split("?")[0]
+            file_name = re.sub(r'\s+', ' ', file_name).strip()
 
-        # 2. Si no hay ZIP general, listar archivos individuales del árbol de la carpeta
-        tree = soup.find(class_=re.compile(r"foldertree|box\s+generalbox"))
-        if tree:
-            for a_tag in tree.find_all("a", href=re.compile(r"pluginfile\.php")):
-                file_url = make_absolute_url(base_url, a_tag.get("href", ""))
-                file_name = a_tag.get_text(strip=True) or file_url.split("/")[-1].split("?")[0]
-                
-                # Obtener tamaño si está en el DOM
-                size_hint = None
-                size_span = a_tag.find_next("span", class_="filesize")
-                if size_span:
-                    size_hint = size_span.get_text(strip=True)
+            size_hint = None
+            size_span = a_tag.find_next("span", class_=re.compile(r"filesize"))
+            if size_span:
+                size_hint = size_span.get_text(strip=True)
 
+            if not any(f.url == file_url for f in files):
                 files.append(FileItem(
                     name=file_name,
                     url=file_url,
                     size_hint=size_hint,
+                    section_name=section_name,
+                    source_module=module_name
+                ))
+
+        # 2. Si no se encontraron archivos individuales, buscar formulario/botón ZIP
+        if not files:
+            zip_form = soup.find("form", action=re.compile(r"download_folder\.php"))
+            if zip_form:
+                action_url = make_absolute_url(base_url, zip_form.get("action", ""))
+                inputs = {inp.get("name"): inp.get("value", "") for inp in zip_form.find_all("input") if inp.get("name")}
+                query_str = "&".join(f"{k}={v}" for k, v in inputs.items())
+                zip_url = f"{action_url}?{query_str}" if query_str else action_url
+
+                files.append(FileItem(
+                    name=f"{sanitize_filename(module_name)}.zip",
+                    url=zip_url,
                     section_name=section_name,
                     source_module=module_name
                 ))
