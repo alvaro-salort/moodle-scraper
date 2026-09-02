@@ -1,6 +1,6 @@
 # 🎓 Moodle 4.x Scraper & Extractor de Teoría (ITU UNCUYO)
 
-Un scraper modular, robusto y automatizado en **Python 3.10+** diseñado específicamente para la plataforma **Moodle 4.x** 
+Un scraper modular, robusto y automatizado en **Python 3.10+** diseñado específicamente para la plataforma **Moodle 4.x**
 
 Permite descargar automáticamente todos los recursos de estudio (PDFs, presentaciones PPTX, documentos Word DOCX, hojas de cálculo, archivos comprimidos ZIP y carpetas completas) y extraer todo el texto, teoría explicativa, etiquetas y páginas teóricas a archivos **Markdown (.md)** perfectamente estructurados por temas y unidades.
 
@@ -173,11 +173,19 @@ python main.py --filter "Hardware"
 
 ## 🧪 Ejecución de Pruebas Unitarias
 
-Para validar el funcionamiento de los componentes internos (parsers DOM, sanitización de nombres en Windows, extracción de cabeceras HTTP y formateo Markdown):
+Para validar el funcionamiento de los componentes internos (parsers DOM, sanitización de nombres en Windows, extracción de cabeceras HTTP, autenticación, concurrencia y formateo Markdown), se usa `pytest`:
 
 ```bash
-python -m unittest discover -s tests
+python -m pytest
 ```
+
+También puede ejecutarse directamente con el entorno virtual del proyecto:
+
+```bash
+.\.venv\Scripts\python.exe -m pytest
+```
+
+> La suite actual cubre validaciones de utilidades, parser, downloader, sesión, concurrencia y generación de Markdown.
 
 ---
 
