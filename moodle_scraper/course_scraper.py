@@ -94,42 +94,106 @@ class CourseScraper:
                 Logger.error(f"No se pudo cargar el curso {course.name} ({course_view_url}): {e}")
                 return stats
 
-            # Detectar si el curso está dividido en pestañas o sub-páginas (onetopic / multipage)
-            tab_links = MoodleParser.extract_section_links_from_html(course_html, self.config.base_url, course.id)
-            
-            if len(tab_links) > 1:
-                Logger.info(f"Formato multi-pestaña / multi-sección detectado: {len(tab_links)} pestañas encontradas.")
+            # Caso 1: Formato Onetopic (árbol jerárquico de pestañas y subtemas)
+            if MoodleParser.is_onetopic_course(course_html):
+                Logger.info("Formato Onetopic (árbol de pestañas y subtemas) detectado.")
+                l0_tabs = MoodleParser.extract_onetopic_level_0_tabs(course_html, self.config.base_url, course.id)
                 seen_sec_ids = set()
-                
-                # Procesar la página base actual primero
-                base_sections = MoodleParser.parse_course_sections(course_html, self.config.base_url)
-                for s in base_sections:
-                    if s.id not in seen_sec_ids:
-                        seen_sec_ids.add(s.id)
-                        sections.append(s)
 
-                # Visitar cada pestaña adicional
-                for sec_num, sec_title, tab_url in tab_links:
-                    try:
-                        tab_resp = self.session.get(tab_url)
-                        if tab_resp.status_code == 200:
-                            tab_sections = MoodleParser.parse_course_sections(tab_resp.text, self.config.base_url)
-                            for s in tab_sections:
-                                if s.id not in seen_sec_ids:
-                                    seen_sec_ids.add(s.id)
-                                    sections.append(s)
-                    except Exception as e:
-                        Logger.warn(f"No se pudo cargar pestaña {sec_title} ({tab_url}): {e}")
+                for l0 in l0_tabs:
+                    if l0.get("disabled"):
+                        Logger.info(f"Pestaña oculta o no disponible omitida: {l0.get('title')}")
+                        continue
+
+                    # Si la pestaña raíz no tiene hijos, se procesa directamente
+                    if not l0.get("haschilds"):
+                        try:
+                            tab_resp = self.session.get(l0["url"])
+                            if tab_resp.status_code == 200:
+                                parsed_secs = MoodleParser.parse_course_sections(
+                                    tab_resp.text,
+                                    self.config.base_url,
+                                    target_section_number=l0["section"],
+                                    section_title=l0["title"],
+                                    parent_name=None
+                                )
+                                for s in parsed_secs:
+                                    if s.id not in seen_sec_ids:
+                                        seen_sec_ids.add(s.id)
+                                        sections.append(s)
+                        except Exception as e:
+                            Logger.warn(f"No se pudo cargar pestaña {l0.get('title')}: {e}")
+                    else:
+                        # Si tiene subpestañas (ej: Módulo I -> Clase 1, Clase 2...)
+                        parent_title = l0.get("title", "")
+                        Logger.info(f"Explorando subpestañas de: {parent_title}")
+                        try:
+                            parent_resp = self.session.get(l0["url"])
+                            if parent_resp.status_code == 200:
+                                l1_tabs = MoodleParser.extract_onetopic_level_1_tabs(
+                                    parent_resp.text,
+                                    self.config.base_url,
+                                    parent_title=parent_title
+                                )
+                                for l1 in l1_tabs:
+                                    try:
+                                        # Si la subpestaña apunta a la misma sección base ya cargada (ej: 'Inicio')
+                                        if l1.section_number == l0.get("section"):
+                                            sub_resp_text = parent_resp.text
+                                        else:
+                                            child_resp = self.session.get(l1.url)
+                                            sub_resp_text = child_resp.text if child_resp.status_code == 200 else ""
+
+                                        if sub_resp_text:
+                                            parsed_secs = MoodleParser.parse_course_sections(
+                                                sub_resp_text,
+                                                self.config.base_url,
+                                                target_section_number=l1.section_number,
+                                                section_title=l1.title,
+                                                parent_name=l1.parent_name
+                                            )
+                                            for s in parsed_secs:
+                                                if s.id not in seen_sec_ids:
+                                                    seen_sec_ids.add(s.id)
+                                                    sections.append(s)
+                                    except Exception as e:
+                                        Logger.warn(f"No se pudo cargar subtema {parent_title} > {l1.title}: {e}")
+                        except Exception as e:
+                            Logger.warn(f"No se pudo cargar pestaña padre {parent_title}: {e}")
+
+            # Caso 2: Pestañas estándar multipágina o secciones en una sola página
             else:
-                sections = MoodleParser.parse_course_sections(course_html, self.config.base_url)
+                tab_links = MoodleParser.extract_section_links_from_html(course_html, self.config.base_url, course.id)
+                if len(tab_links) > 1:
+                    Logger.info(f"Formato multi-sección detectado: {len(tab_links)} pestañas encontradas.")
+                    seen_sec_ids = set()
+                    for sec_num, sec_title, tab_url in tab_links:
+                        try:
+                            tab_resp = self.session.get(tab_url)
+                            if tab_resp.status_code == 200:
+                                tab_sections = MoodleParser.parse_course_sections(
+                                    tab_resp.text,
+                                    self.config.base_url,
+                                    target_section_number=sec_num,
+                                    section_title=sec_title
+                                )
+                                for s in tab_sections:
+                                    if s.id not in seen_sec_ids:
+                                        seen_sec_ids.add(s.id)
+                                        sections.append(s)
+                        except Exception as e:
+                            Logger.warn(f"No se pudo cargar pestaña {sec_title} ({tab_url}): {e}")
+                else:
+                    sections = MoodleParser.parse_course_sections(course_html, self.config.base_url)
 
         stats.sections_count = len(sections)
         Logger.info(f"Secciones totales a procesar: {len(sections)}")
 
         # 4. Recorrer secciones, procesar actividades y descargar archivos
         for sec in sections:
-            Logger.section(sec.name)
-            sec_dir = course_dir / sec.folder_name
+            sec_display = f"{sec.parent_name} > {sec.name}" if sec.parent_name else sec.name
+            Logger.section(sec_display)
+            sec_dir = course_dir / sec.relative_folder_path
             sec_dir.mkdir(parents=True, exist_ok=True)
 
             download_jobs: List[_DownloadJob] = []
@@ -208,16 +272,6 @@ class CourseScraper:
                         mod.name
                     )
                     mod.files.extend(folder_files)
-                    
-                    for f in folder_files:
-                        jobs.append(_DownloadJob(
-                            url=f.url,
-                            dest_dir=sec_dir,
-                            fallback_name=f.name,
-                            source_info=f"Carpeta: {mod.name}",
-                            target_module=mod,
-                            section_name=section.name
-                        ))
             except Exception as e:
                 Logger.error(f"Error procesando carpeta {mod.name}: {e}")
 
@@ -233,7 +287,11 @@ class CourseScraper:
                 section_name=section.name
             ))
 
-        # E) Descargar archivos adjuntos / contenidos directos detectados
+        # E) Actividades de entrega / Tareas (/mod/assign/view.php)
+        elif mod.mod_type == "assign":
+            Logger.info(f"Actividad de entrega detectada: {mod.name}")
+
+        # F) Descargar archivos adjuntos / contenidos directos detectados
         for f in mod.files:
             if f.url:
                 jobs.append(_DownloadJob(
@@ -247,6 +305,16 @@ class CourseScraper:
 
     def _execute_download_jobs(self, jobs: List[_DownloadJob], stats: CourseProcessingStats) -> None:
         """Ejecuta los trabajos de descarga en paralelo o secuencial según la configuración."""
+        # Deduplicar trabajos de descarga para evitar colisiones de concurrencia en el mismo archivo
+        unique_jobs: List[_DownloadJob] = []
+        seen_keys = set()
+        for j in jobs:
+            key = (str(j.dest_dir), j.url)
+            if key not in seen_keys:
+                seen_keys.add(key)
+                unique_jobs.append(j)
+        jobs = unique_jobs
+
         workers = max(1, self.config.max_workers)
 
         def _run_job(job: _DownloadJob) -> Tuple[bool, Optional[Path], str, _DownloadJob]:
