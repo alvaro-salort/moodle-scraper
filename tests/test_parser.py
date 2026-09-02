@@ -3,6 +3,7 @@ Pruebas unitarias para el parser de Moodle 4.x (HTML, AJAX, cursos, secciones y 
 """
 
 import unittest
+from bs4 import BeautifulSoup
 from moodle_scraper.parser import MoodleParser, Course, CourseSection, CourseModule
 
 
@@ -233,6 +234,103 @@ class TestParser(unittest.TestCase):
         self.assertEqual(links[0][0], 0)
         self.assertEqual(links[1][0], 1)
         self.assertEqual(links[2][0], 2)
+
+    def test_course_section_relative_folder_path(self):
+        from pathlib import Path
+        # Sección sin padre
+        sec1 = CourseSection(id="1", section_number=1, name="Bienvenida")
+        self.assertEqual(sec1.relative_folder_path, Path("Bienvenida"))
+
+        # Sección con padre (Módulo I > Clase 2)
+        sec2 = CourseSection(id="7", section_number=7, name="Clase 2", parent_name="Módulo I")
+        self.assertEqual(sec2.relative_folder_path, Path("Modulo I") / "Clase 2")
+
+    def test_onetopic_detection_and_tabs_extraction(self):
+        html_level_0 = """
+        <div id="tabs-tree-start">
+            <ul class="nav nav-tabs onetopic">
+                <li class="nav-item tab_position_1 tab_level_0"><a href="/itu/course/view.php?id=2435&section=1">Bienvenida</a></li>
+                <li class="nav-item tab_position_5 tab_level_0 haschilds"><a href="/itu/course/view.php?id=2435&section=5">Módulo I</a></li>
+                <li class="nav-item tab_position_11 tab_level_0 disabled dimmed haschilds"><a href="/itu/course/view.php?id=2435&section=11">Módulo II</a></li>
+            </ul>
+        </div>
+        """
+        base_url = "https://aulas.itu.uncu.edu.ar/itu/"
+        self.assertTrue(MoodleParser.is_onetopic_course(html_level_0))
+
+        l0_tabs = MoodleParser.extract_onetopic_level_0_tabs(html_level_0, base_url, "2435")
+        self.assertEqual(len(l0_tabs), 3)
+        self.assertEqual(l0_tabs[0]["title"], "Bienvenida")
+        self.assertFalse(l0_tabs[0]["haschilds"])
+        self.assertEqual(l0_tabs[1]["title"], "Módulo I")
+        self.assertTrue(l0_tabs[1]["haschilds"])
+        self.assertTrue(l0_tabs[2]["disabled"])
+
+        html_level_1 = """
+        <div id="tabs-tree-start">
+            <ul class="nav nav-tabs onetopic">
+                <li class="nav-item tab_position_5 tab_level_1 subtopic"><a href="/itu/course/view.php?id=2435&section=5">Inicio</a></li>
+                <li class="nav-item tab_position_6 tab_level_1 subtopic"><a href="/itu/course/view.php?id=2435&section=6">Clase 1</a></li>
+                <li class="nav-item tab_position_7 tab_level_1 subtopic"><a href="/itu/course/view.php?id=2435&section=7">Clase 2</a></li>
+                <li class="nav-item tab_position_10 tab_level_1 subtopic disabled dimmed"><a href="/itu/course/view.php?id=2435&section=10">Clase 5</a></li>
+            </ul>
+        </div>
+        """
+        l1_tabs = MoodleParser.extract_onetopic_level_1_tabs(html_level_1, base_url, "Módulo I")
+        self.assertEqual(len(l1_tabs), 3)  # Clase 5 disabled no se incluye
+        self.assertEqual(l1_tabs[0].title, "Inicio")
+        self.assertEqual(l1_tabs[0].parent_name, "Módulo I")
+        self.assertEqual(l1_tabs[2].title, "Clase 2")
+        self.assertEqual(l1_tabs[2].section_number, 7)
+
+    def test_parse_assign_activity(self):
+        html = """
+        <li class="activity modtype_assign" id="module-189579">
+            <div class="activityinstance">
+                <a class="aalink stretched-link" href="https://aulas.itu.uncu.edu.ar/itu/mod/assign/view.php?id=189579">
+                    <span class="instancename">Entrega TP2 - Formato JSON <span class="accesshide "> Tarea</span></span>
+                </a>
+            </div>
+        </li>
+        """
+        base_url = "https://aulas.itu.uncu.edu.ar/itu/"
+        soup = BeautifulSoup(html, "html.parser")
+        act_elem = soup.find("li", class_="activity")
+        mod = MoodleParser._parse_activity_element(act_elem, base_url, "Clase 2")
+
+        self.assertIsNotNone(mod)
+        self.assertEqual(mod.mod_type, "assign")
+        self.assertEqual(mod.name, "Entrega TP2 - Formato JSON")
+        self.assertEqual(mod.url, "https://aulas.itu.uncu.edu.ar/itu/mod/assign/view.php?id=189579")
+
+    def test_parse_folder_files_extracts_individual_files(self):
+        html = """
+        <div class="foldertree">
+            <span class="fp-filename-icon">
+                <a href="https://aulas.itu.uncu.edu.ar/itu/pluginfile.php/293076/mod_folder/content/0/TP2_Ejercicio6.docx?forcedownload=1">
+                    <span class="fp-filename">TP2_Ejercicio6.docx</span>
+                </a>
+                <span class="filesize">45.2 KB</span>
+            </span>
+            <span class="fp-filename-icon">
+                <a href="https://aulas.itu.uncu.edu.ar/itu/pluginfile.php/293076/mod_folder/content/0/TP2_JSON.pdf?forcedownload=1">
+                    <span class="fp-filename">TP2_JSON.pdf</span>
+                </a>
+                <span class="filesize">1.2 MB</span>
+            </span>
+        </div>
+        <form action="https://aulas.itu.uncu.edu.ar/itu/mod/folder/download_folder.php">
+            <input type="hidden" name="id" value="189577">
+        </form>
+        """
+        base_url = "https://aulas.itu.uncu.edu.ar/itu/"
+        files = MoodleParser.parse_folder_files(html, base_url, "Clase 2", "TP2 - Documentos JSON")
+
+        self.assertEqual(len(files), 2)
+        f_names = [f.name for f in files]
+        self.assertIn("TP2_Ejercicio6.docx", f_names)
+        self.assertIn("TP2_JSON.pdf", f_names)
+        self.assertNotIn("TP2 - Documentos JSON.zip", f_names)
 
 
 if __name__ == "__main__":
