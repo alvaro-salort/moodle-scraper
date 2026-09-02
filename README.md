@@ -12,23 +12,31 @@ Permite descargar automáticamente todos los recursos de estudio (PDFs, presenta
   - Extracción automática de token CSRF (`logintoken`) previo al `POST` de login.
   - Persistencia de cookies con `requests.Session` y obtención de clave de sesión (`sesskey`).
   - **Soporte de Cookie de Sesión Directa (`MoodleSession`):** Permite conectarse directamente en entornos que utilizan Single Sign-On (Google Workspace, Microsoft 365 / Entra ID) o Captcha.
-- 🧭 **Mapeo Inteligente de Cursos:**
-  - Detección rápida mediante el WebService AJAX de Moodle (`core_course_get_enrolled_courses_by_timeline_classification`), `my/courses.php` y `my/`.
+- 🧭 **Mapeo Inteligente y Soporte Completo Onetopic (Árbol de Pestañas):**
+  - Detección rápida mediante WebService AJAX y navegación HTML inteligente.
+  - **Soporte Nativo de `format_onetopic` con Subtemas Jerárquicos:** Rastrea automáticamente las pestañas de nivel superior y descubre dinámicamente las subpestañas hijas (ej: `Módulo I -> Clase 1, Clase 2, Clase 3...`).
+  - **Organización Jerárquica en Disco:** Estructura las descargas reflejando exactamente la jerarquía del aula (ej: `downloads/Curso/Modulo I/Clase 2/`).
   - Menú interactivo para seleccionar cursos individuales (`1`), listas/rangos (`1,3,5` o `1-4`), o todos con `a`.
+- 📁 **Descarga Completa de Recursos y Carpetas:**
+  - Descarga de archivos directos (`mod_resource`: PDFs, DOCX, PPTX, etc.).
+  - **Extracción de Carpetas (`mod_folder`):** Extrae y descarga todos los archivos individuales contenidos en carpetas de Moodle directamente en la carpeta de la clase.
+  - **Reconocimiento de Actividades de Entrega (`mod_assign`):** Detecta tareas como `Entrega TP2 - Formato JSON`, limpia las etiquetas de accesibilidad y registra su enlace de entrega en los reportes Markdown.
 - ⚡ **Descargas Concurrentes y Streaming de Alto Rendimiento:**
   - **Pool de Descargas Paralelas (`ThreadPoolExecutor`):** Descarga múltiples archivos simultáneamente con control de hilos concurrentes (`--workers`).
+  - **Deduplicación Inteligente de Tareas:** Evita descargas concurrentes duplicadas y bloqueos de escritura en disco.
   - **Motor de Parseo `lxml` Ultrarrápido:** Extracción del árbol DOM 5x-10x más rápida con tolerancia a HTML mal formado.
   - **Cortesía de Red y Rate Limiting:** Control de retardo (`--delay`) y reintentos adaptativos para proteger el servidor de la universidad.
   - Descarga en bloques de 8KB (`stream=True`) con archivos temporales `.part` para evitar corrupciones.
   - Resolución inteligente de nombres reales mediante cabeceras `Content-Disposition` (RFC 5987 / RFC 2616), URLs redirigidas y `Content-Type`.
   - **Mecanismo Anti-Duplicados:** Omite descargas de archivos existentes con el mismo tamaño para reanudación instantánea sin consumo innecesario de ancho de banda.
 - 📝 **Extracción Completa de Texto y Teoría a Markdown:**
-  - **Títulos de sección:** Nombres limpios de cada unidad o tema.
+  - **Títulos de sección:** Nombres limpios respetando la jerarquía del aula virtual.
   - **Etiquetas y avisos (`mod_label`):** Explicaciones de los profesores, notas y advertencias.
   - **Páginas teóricas (`mod_page`):** Extracción y conversión completa de HTML a Markdown limpio.
-  - **Enlaces externos (`mod_url`):** Enlaces web y descripciones asociadas.
-  - **Consolidado General (`notas_y_teoria_completa.md`):** Todo el curso en un solo documento con índice y enlaces.
-  - **Resumen por tema (`resumen_tema.md`):** Contenido textual específico dentro de cada carpeta de tema.
+  - **Enlaces externos (`mod_url`):** Enlaces web resueltos y enlaces directos.
+  - **Tareas y Entregas (`mod_assign`):** Enlaces directos para visualizar y realizar entregas en Moodle.
+  - **Consolidado General (`notas_y_teoria_completa.md`):** Todo el curso en un solo documento con índice y enlaces organizados por jerarquía.
+  - **Resumen por tema (`resumen_tema.md`):** Contenido textual específico dentro de cada carpeta o subcarpeta de clase.
 - 🛡 **Sanitización Total de Archivos:** Compatible al 100% con Windows (`\ / : * ? " < > |`), Linux y macOS (incluyendo soporte UTF-8 seguro para consolas Windows).
 - 🎨 **Consola Enriquecida:** Colores, estados claros y métricas detalladas de descarga en tiempo real.
 
@@ -36,22 +44,31 @@ Permite descargar automáticamente todos los recursos de estudio (PDFs, presenta
 
 ## 📁 Estructura de Archivos Generada
 
-Al ejecutar el scraper, se organizará el material de la siguiente manera:
+Al ejecutar el scraper, el material se organizará respetando la estructura real del aula:
 
 ```text
 downloads/
-└── 2025B - Álgebra y Estadística - Junin_DS/
+└── 2025B - Base de Datos Avanzadas - JNN_DS/
     ├── notas_y_teoria_completa.md       # Todo el texto, etiquetas y teoría consolidada
-    ├── Tema_0_General_Información General/
-    │   ├── resumen_tema.md              # Resumen y avisos generales
-    │   └── Programa_de_la_Materia.pdf   # Archivos descargados
-    ├── Tema_1_Matrices y Determinantes/
-    │   ├── resumen_tema.md              # Explicaciones teóricas de la unidad
-    │   ├── Teoria_Matrices.pdf
-    │   └── Guia_Practica_1.docx
-    └── Tema_2_Sistemas de Ecuaciones Lineales/
-        ├── resumen_tema.md
-        └── Ejercicios_Resueltos.pdf
+    ├── Bienvenida/
+    │   └── resumen_tema.md              # Resumen y avisos de la sección
+    ├── GENERAL/
+    │   └── resumen_tema.md
+    ├── Introduccion/
+    │   ├── resumen_tema.md
+    │   └── Programa_Analitico.pdf
+    └── Modulo I/
+        ├── Inicio/
+        │   ├── resumen_tema.md
+        │   └── Presentacion_Asignatura.pptx
+        ├── Clase 1/
+        │   ├── resumen_tema.md
+        │   ├── NoSQL_Introduccion.pdf
+        │   └── TP1_BigData.pdf
+        └── Clase 2/
+            ├── resumen_tema.md          # Incluye links a videos y tarea 'Entrega TP2'
+            ├── TP2_Ejercicio6_Resuelto.docx
+            └── TP2_JSON_BasesDeDatos.pdf
 ```
 
 ---
