@@ -182,14 +182,16 @@ class CourseMarkdownWriter:
         # 1. Tabla de contenidos
         for idx, sec in enumerate(sections, 1):
             anchor = re.sub(r'[^a-zA-Z0-9_-]', '', sec.name.lower().replace(" ", "-"))
-            lines.append(f"{idx}. [{sec.name}](#{anchor})")
+            display_title = f"{sec.parent_name} > {sec.name}" if sec.parent_name else sec.name
+            lines.append(f"{idx}. [{display_title}](#{anchor})")
 
         lines.append("\n---\n")
 
         # 2. Contenido detallado por sección
         for sec in sections:
             anchor = re.sub(r'[^a-zA-Z0-9_-]', '', sec.name.lower().replace(" ", "-"))
-            lines.append(f"## <a id=\"{anchor}\"></a>{sec.name}\n")
+            display_title = f"{sec.parent_name} > {sec.name}" if sec.parent_name else sec.name
+            lines.append(f"## <a id=\"{anchor}\"></a>{display_title}\n")
 
             # Resumen o texto introductorio de la sección
             if sec.summary_html:
@@ -220,8 +222,9 @@ class CourseMarkdownWriter:
         """
         Genera resumen_tema.md dentro de la carpeta específica del tema.
         """
+        header_title = f"{section.parent_name} - {section.name}" if section.parent_name else section.name
         lines = [
-            f"# 📖 {section.name}",
+            f"# 📖 {header_title}",
             f"\n> Curso: **{course.name}**",
             "\n---",
             "\n### 📝 Resumen y Explicación de la Unidad\n"
@@ -281,11 +284,13 @@ class CourseMarkdownWriter:
         elif mod.description_text:
             lines.append(f"**Descripción:** {mod.description_text}\n")
 
-        # Enlace externo si aplica
+        # Enlace externo o enlace de tarea si aplica
         if mod.external_url:
             lines.append(f"- 🌐 **Enlace externo:** [{mod.external_url}]({mod.external_url})\n")
         elif mod.url and mod.mod_type == "url":
             lines.append(f"- 🌐 **Enlace de Moodle:** [{mod.url}]({mod.url})\n")
+        elif mod.url and mod.mod_type == "assign":
+            lines.append(f"- 📋 **Entrega en Moodle:** [{mod.name}]({mod.url})\n")
 
         # Archivos adjuntos o contenidos
         if mod.files:
