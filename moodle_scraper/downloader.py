@@ -6,6 +6,7 @@ anti-duplicados, reanudación y sanitización de rutas.
 import mimetypes
 import os
 import re
+import hashlib
 from pathlib import Path
 from typing import Optional, Tuple
 from urllib.parse import unquote, urlparse
@@ -91,7 +92,8 @@ class Downloader:
         url: str,
         dest_dir: Path,
         fallback_name: Optional[str] = None,
-        source_info: str = ""
+        source_info: str = "",
+        filename_suffix: Optional[str] = None,
     ) -> Tuple[bool, Optional[Path], str]:
         """
         Descarga un archivo con streaming en bloques de 8KB.
@@ -109,6 +111,9 @@ class Downloader:
 
         # Resolver el nombre final del archivo
         filename = self.resolve_filename(response, fallback_name)
+        if filename_suffix:
+            path = Path(filename)
+            filename = f"{path.stem}-{sanitize_filename(filename_suffix)}{path.suffix}"
         target_path = dest_dir / filename
         temp_path = dest_dir / f"{filename}.part"
 

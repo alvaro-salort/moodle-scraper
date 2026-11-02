@@ -28,6 +28,40 @@ def test_html_to_markdown_formatting():
     assert "> Cita célebre" in md
 
 
+def test_html_to_markdown_uses_local_image_path():
+    html = '<p>Diagrama:</p><img src="https://moodle.test/pluginfile.php/1/diagrama.png" alt="Diagrama">'
+
+    md = MarkdownFormatter.html_to_markdown(
+        html,
+        {"https://moodle.test/pluginfile.php/1/diagrama.png": "imagenes/diagrama.png"},
+    )
+
+    assert "![Diagrama](imagenes/diagrama.png)" in md
+    assert "https://moodle.test/pluginfile.php/1/diagrama.png" not in md
+
+
+def test_section_summary_uses_relative_path_to_course_images(tmp_path):
+    course_dir = tmp_path / "curso"
+    output_file = course_dir / "Tema 1" / "resumen_tema.md"
+    image_path = course_dir / "imagenes" / "diagrama.png"
+    course = Course(id="101", name="Curso")
+    section = CourseSection(
+        id="sec-1",
+        section_number=1,
+        name="Tema 1",
+        summary_html='<img src="https://moodle.test/diagrama.png" alt="Diagrama">',
+    )
+
+    CourseMarkdownWriter.generate_section_summary(
+        course,
+        section,
+        output_file,
+        {"https://moodle.test/diagrama.png": image_path},
+    )
+
+    assert "![Diagrama](../imagenes/diagrama.png)" in output_file.read_text(encoding="utf-8")
+
+
 def test_generate_consolidated_markdown(tmp_path):
     course = Course(id="101", name="2025B - Álgebra y Estadística - Junin/DS")
     sec1 = CourseSection(
