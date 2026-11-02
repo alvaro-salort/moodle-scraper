@@ -9,7 +9,7 @@ import time
 from typing import List, Optional
 import requests
 
-from moodle_scraper.config import ScraperConfig, load_config
+from moodle_scraper.config import ScraperConfig
 from moodle_scraper.course_scraper import CourseScraper, CourseProcessingStats
 from moodle_scraper.course_selector import CourseSelection, CourseSelector
 from moodle_scraper.parser import Course, MoodleParser
@@ -29,8 +29,6 @@ class MoodleCLI:
 
     def run(self, args: Optional[argparse.Namespace] = None) -> int:
         """Punto de entrada principal del flujo CLI."""
-        Logger.header("MOODLE 4.x SCRAPER & TEORÍA EXTRACTOR - ITU UNCUYO")
-
         # Validar configuración
         errors = self.config.validate()
         if errors:

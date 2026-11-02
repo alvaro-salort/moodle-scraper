@@ -12,7 +12,11 @@ import argparse
 import sys
 from pathlib import Path
 
-from moodle_scraper.config import load_config
+from moodle_scraper.config import (
+    load_config,
+    prompt_for_base_url,
+    prompt_for_credentials,
+)
 from moodle_scraper.cli import MoodleCLI
 from moodle_scraper.utils import Logger
 
@@ -100,9 +104,11 @@ def main() -> int:
     if args.cookie is not None:
         config.session_cookie = args.cookie
 
-    cli = MoodleCLI(config)
-
     try:
+        Logger.header("MOODLE 4.x SCRAPER & TEORÍA EXTRACTOR - ITU UNCUYO")
+        prompt_for_base_url(config)
+        prompt_for_credentials(config)
+        cli = MoodleCLI(config)
         return cli.run(args)
     except KeyboardInterrupt:
         print("\n")

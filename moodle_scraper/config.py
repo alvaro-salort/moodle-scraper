@@ -6,6 +6,7 @@ Soporta carga desde archivos .env, scraper.conf (INI) y variables de entorno del
 import os
 import sys
 import configparser
+import getpass
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -60,6 +61,31 @@ class ScraperConfig:
         return self.chunk_size_kb * 1024
 
 
+def prompt_for_credentials(
+    config: ScraperConfig,
+    input_func=input,
+    password_func=getpass.getpass,
+) -> None:
+    """Solicita credenciales faltantes sin mostrarlas en pantalla."""
+    if config.session_cookie:
+        return
+
+    if not config.user:
+        config.user = input_func("Usuario de Moodle: ").strip()
+    if not config.password:
+        config.password = password_func("Contraseña de Moodle: ")
+
+
+def prompt_for_base_url(config: ScraperConfig, input_func=input) -> None:
+    """Solicita la URL base de Moodle cuando no fue configurada."""
+    if config.base_url:
+        return
+
+    config.base_url = input_func("URL base de Moodle: ").strip()
+    if config.base_url and not config.base_url.endswith("/"):
+        config.base_url += "/"
+
+
 def load_config(
     env_path: Optional[str | Path] = None,
     conf_path: Optional[str | Path] = None
@@ -100,12 +126,8 @@ def load_config(
     password = os.getenv("MOODLE_PASSWORD") or conf_values.get("password") or ""
     session_cookie = os.getenv("MOODLE_SESSION_COOKIE") or conf_values.get("session_cookie") or None
     
-    base_url = (
-        os.getenv("MOODLE_BASE_URL")
-        or conf_values.get("base_url")
-        or "https://aulas.itu.uncu.edu.ar/itu/"
-    )
-    if not base_url.endswith("/"):
+    base_url = os.getenv("MOODLE_BASE_URL") or conf_values.get("base_url") or ""
+    if base_url and not base_url.endswith("/"):
         base_url += "/"
 
     download_dir_str = (
