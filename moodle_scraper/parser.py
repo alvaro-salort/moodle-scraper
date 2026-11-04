@@ -22,6 +22,7 @@ class FileItem:
     size_hint: Optional[str] = None
     section_name: str = ""
     source_module: str = ""
+    local_name: str = ""
 
 
 @dataclass

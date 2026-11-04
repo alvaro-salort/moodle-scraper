@@ -86,6 +86,75 @@ def test_section_summary_uses_relative_path_to_course_images(tmp_path):
     assert "![Diagrama](../imagenes/diagrama.png)" in output_file.read_text(encoding="utf-8")
 
 
+def test_section_summary_links_to_local_downloaded_name(tmp_path):
+    course_dir = tmp_path / "curso"
+    output_file = course_dir / "Tema 1" / "resumen_tema.md"
+    local_file = output_file.parent / "Presentacion.pdf"
+    local_file.parent.mkdir(parents=True)
+    local_file.write_bytes(b"ok")
+
+    course = Course(id="101", name="Curso")
+    section = CourseSection(
+        id="sec-1",
+        section_number=1,
+        name="Tema 1",
+        modules=[
+            CourseModule(
+                id="mod-1",
+                mod_type="resource",
+                name="Presentación",
+                files=[
+                    FileItem(
+                        name="Presentación.pdf",
+                        url="https://moodle.test/pluginfile.php/1/Presentaci%C3%B3n.pdf",
+                        local_name="Presentacion.pdf",
+                    )
+                ],
+            )
+        ],
+    )
+
+    CourseMarkdownWriter.generate_section_summary(course, section, output_file)
+
+    content = output_file.read_text(encoding="utf-8")
+    assert "[`Presentación.pdf`](Presentacion.pdf)" in content
+    assert "No descargado" not in content
+
+
+def test_consolidated_file_links_are_relative_to_course(tmp_path):
+    course_dir = tmp_path / "curso"
+    output_file = course_dir / "notas_y_teoria_completa.md"
+    local_file = course_dir / "Tema1" / "Presentacion.pdf"
+    local_file.parent.mkdir(parents=True)
+    local_file.write_bytes(b"ok")
+
+    course = Course(id="101", name="Curso")
+    section = CourseSection(
+        id="sec-1",
+        section_number=1,
+        name="Tema1",
+        modules=[
+            CourseModule(
+                id="mod-1",
+                mod_type="resource",
+                name="Presentación",
+                files=[
+                    FileItem(
+                        name="Presentación.pdf",
+                        url="https://moodle.test/pluginfile.php/1/Presentaci%C3%B3n.pdf",
+                        local_name="Presentacion.pdf",
+                    )
+                ],
+            )
+        ],
+    )
+
+    CourseMarkdownWriter.generate_consolidated_markdown(course, [section], output_file)
+
+    content = output_file.read_text(encoding="utf-8")
+    assert "[`Presentación.pdf`](Tema1/Presentacion.pdf)" in content
+
+
 def test_generate_consolidated_markdown(tmp_path):
     course = Course(id="101", name="2025B - Álgebra y Estadística - Junin/DS")
     sec1 = CourseSection(

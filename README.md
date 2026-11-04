@@ -171,6 +171,15 @@ python main.py --filter "Hardware"
 - `--env "ruta/a/otro.env"`: Carga un archivo `.env` específico.
 - `--conf "ruta/a/config.ini"`: Carga un archivo INI específico.
 
+### 6. Verificar Enlaces Locales
+Comprueba que todos los enlaces a archivos e imágenes de un árbol de descargas apunten a archivos existentes, sin necesidad de iniciar sesión:
+```bash
+python main.py --check-links ./downloads
+```
+Genera `verificacion_enlaces.txt` dentro del directorio verificado y devuelve código de salida `1` si encuentra referencias rotas. La misma verificación se ejecuta automáticamente al finalizar cada curso.
+
+> Los Markdown usan el nombre local real del archivo descargado (no el nombre remoto) y codifican espacios/paréntesis en las rutas para que los enlaces sean resolubles.
+
 ---
 
 ---

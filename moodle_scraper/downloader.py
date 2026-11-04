@@ -6,6 +6,7 @@ anti-duplicados, reanudación y sanitización de rutas.
 import mimetypes
 import os
 import re
+import unicodedata
 from pathlib import Path
 from typing import Optional, Tuple
 from urllib.parse import unquote, urlparse
@@ -18,6 +19,27 @@ from moodle_scraper.utils import Logger, sanitize_filename, format_bytes
 
 
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".ico", ".avif"}
+
+
+def _repair_text(value: str) -> str:
+    """
+    Repara el mojibake típico de headers UTF-8 leídos como Latin-1/CP1252
+    y normaliza la forma Unicode a NFC.
+    """
+    if not value:
+        return value
+
+    repaired = value
+    for encoding in ("latin-1", "cp1252"):
+        try:
+            candidate = value.encode(encoding).decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            continue
+        if candidate != value:
+            repaired = candidate
+            break
+
+    return unicodedata.normalize("NFC", repaired)
 
 
 class _DownloadSizeExceeded(Exception):
@@ -44,16 +66,16 @@ class Downloader:
         match_rfc5987 = re.search(r"filename\*\s*=\s*(?:UTF-8|iso-8859-1)?\'\'([^;]+)", cd, re.IGNORECASE)
         if match_rfc5987:
             encoded_name = match_rfc5987.group(1)
-            return unquote(encoded_name).strip(' \t\r\n"')
+            return _repair_text(unquote(encoded_name).strip(' \t\r\n"'))
 
         # 2. Buscar formato estándar: filename="nombre.pdf" o filename=nombre.pdf
         match_std = re.search(r'filename\s*=\s*"([^"]+)"', cd, re.IGNORECASE)
         if match_std:
-            return match_std.group(1).strip()
+            return _repair_text(match_std.group(1).strip())
         
         match_unquoted = re.search(r'filename\s*=\s*([^;]+)', cd, re.IGNORECASE)
         if match_unquoted:
-            return match_unquoted.group(1).strip(' \t\r\n"')
+            return _repair_text(match_unquoted.group(1).strip(' \t\r\n"'))
 
         return None
 
@@ -72,7 +94,7 @@ class Downloader:
 
         # 2. Intentar desde la URL final después de redirecciones
         parsed_url = urlparse(response.url)
-        url_path = unquote(parsed_url.path)
+        url_path = _repair_text(unquote(parsed_url.path))
         url_filename = Path(url_path).name
 
         # Validar si el nombre de la URL parece un archivo real con extensión
@@ -80,7 +102,7 @@ class Downloader:
             return sanitize_filename(url_filename)
 
         # 3. Utilizar nombre alternativo con extensión deducida de Content-Type
-        clean_fallback = sanitize_filename(fallback_name or "archivo")
+        clean_fallback = sanitize_filename(_repair_text(fallback_name or "archivo"))
         content_type = response.headers.get("Content-Type", "").split(";")[0].strip()
         
         if "." not in clean_fallback and content_type:
