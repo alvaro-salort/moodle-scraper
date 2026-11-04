@@ -58,6 +58,31 @@ def test_resolve_filename_from_url_path():
     assert filename == "Presentacion.pdf"
 
 
+def test_extract_filename_repairs_utf8_read_as_latin1():
+    downloader = _make_downloader()
+    resp = MagicMock(spec=requests.Response)
+    resp.headers = {
+        "Content-Disposition": 'attachment; filename="PresentaciÃ³n.pdf"'
+    }
+
+    filename = downloader.extract_filename_from_headers(resp)
+    assert filename == "Presentación.pdf"
+
+
+def test_resolve_filename_repairs_mojibake_before_sanitizing():
+    downloader = _make_downloader()
+    resp = MagicMock(spec=requests.Response)
+    resp.headers = {
+        "Content-Disposition": 'attachment; filename="InvestigaciÃ³n.pdf"'
+    }
+    resp.url = "https://moodle.test/pluginfile.php/1/InvestigaciÃ³n.pdf"
+
+    filename = downloader.resolve_filename(resp)
+
+    assert filename == "Investigacion.pdf"
+    assert "A3" not in filename
+
+
 def test_download_file_adds_suffix_before_extension(tmp_path):
     downloader = _make_downloader()
     response = MagicMock(spec=requests.Response)

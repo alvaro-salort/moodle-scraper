@@ -6,8 +6,8 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from moodle_scraper.config import ScraperConfig
-from moodle_scraper.course_scraper import CourseProcessingStats, CourseScraper
-from moodle_scraper.parser import CourseModule, CourseSection
+from moodle_scraper.course_scraper import CourseProcessingStats, CourseScraper, _DownloadJob
+from moodle_scraper.parser import CourseModule, CourseSection, FileItem
 
 
 def _make_scraper(**config_overrides):
@@ -131,3 +131,62 @@ def test_download_course_images_counts_skipped_existing_files(tmp_path):
     assert len(paths) == 1
     assert stats.images_skipped == 1
     assert stats.images_downloaded == 0
+
+
+def test_handle_download_result_updates_local_name_for_existing_file(tmp_path):
+    scraper = _make_scraper()
+    url = "https://moodle.test/moodle/pluginfile.php/1/Presentaci%C3%B3n.pdf"
+    file_item = FileItem(name="Presentación.pdf", url=url, section_name="Tema 1")
+    module = CourseModule(
+        id="mod-1",
+        mod_type="folder",
+        name="Carpeta",
+        files=[file_item],
+    )
+    job = _DownloadJob(
+        url=url,
+        dest_dir=tmp_path,
+        fallback_name="Presentación.pdf",
+        source_info="Archivo",
+        target_module=module,
+        section_name="Tema 1",
+    )
+    local_path = tmp_path / "Presentacion.pdf"
+
+    scraper._handle_download_result(
+        True,
+        local_path,
+        "Descargado correctamente",
+        job,
+        CourseProcessingStats(),
+    )
+
+    assert file_item.local_name == "Presentacion.pdf"
+
+
+def test_handle_download_result_uses_local_name_for_direct_resource(tmp_path):
+    scraper = _make_scraper()
+    url = "https://moodle.test/moodle/mod/resource/view.php?id=1"
+    module = CourseModule(id="mod-1", mod_type="resource", name="Recurso")
+    job = _DownloadJob(
+        url=url,
+        dest_dir=tmp_path,
+        fallback_name="Recurso",
+        source_info="Recurso",
+        target_module=module,
+        is_direct_resource=True,
+        section_name="Tema 1",
+    )
+    local_path = tmp_path / "Recurso.pdf"
+
+    scraper._handle_download_result(
+        True,
+        local_path,
+        "Descargado correctamente",
+        job,
+        CourseProcessingStats(),
+    )
+
+    assert len(module.files) == 1
+    assert module.files[0].name == "Recurso.pdf"
+    assert module.files[0].local_name == "Recurso.pdf"

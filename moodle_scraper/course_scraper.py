@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup
 
 from moodle_scraper.config import ScraperConfig
 from moodle_scraper.downloader import Downloader
+from moodle_scraper.integrity import check_directory, write_report
 from moodle_scraper.markdown_writer import CourseMarkdownWriter, extract_image_source
 from moodle_scraper.parser import Course, CourseSection, CourseModule, FileItem, MoodleParser
 from moodle_scraper.session import MoodleSession
@@ -237,7 +238,18 @@ class CourseScraper:
                 course, sections, consolidated_path, image_paths, self.config.base_url
             )
 
-        # 7. Reporte de resumen del curso
+        # 7. Verificar que los Markdown no referencien archivos inexistentes
+        link_issues = check_directory(course_dir)
+        report_path = write_report(course_dir, link_issues)
+        if link_issues:
+            Logger.warn(
+                f"Verificación de enlaces: {len(link_issues)} referencia(s) rota(s). "
+                f"Ver {report_path.name}"
+            )
+        else:
+            Logger.success("Verificación de enlaces: todas las referencias locales existen.")
+
+        # 8. Reporte de resumen del curso
         Logger.info(
             f"Resumen de curso '{course.name}': "
             f"{stats.files_downloaded} descargados, "
@@ -475,14 +487,25 @@ class CourseScraper:
             else:
                 stats.files_downloaded += 1
 
-            if path and job.is_direct_resource and job.target_module:
-                # Evitar duplicar en la lista de files del módulo
-                if not any(f.name == path.name for f in job.target_module.files):
-                    job.target_module.files.append(FileItem(
-                        name=path.name,
-                        url=job.url,
-                        section_name=job.section_name,
-                        source_module=job.target_module.name
-                    ))
+            if path and job.target_module:
+                # El nombre local resuelto es la fuente de verdad para los enlaces Markdown
+                matched = False
+                for file_item in job.target_module.files:
+                    if file_item.url == job.url:
+                        file_item.local_name = path.name
+                        matched = True
+
+                if job.is_direct_resource and not matched:
+                    if not any(
+                        (f.local_name or f.name) == path.name
+                        for f in job.target_module.files
+                    ):
+                        job.target_module.files.append(FileItem(
+                            name=path.name,
+                            url=job.url,
+                            section_name=job.section_name,
+                            source_module=job.target_module.name,
+                            local_name=path.name
+                        ))
         else:
             stats.files_failed += 1

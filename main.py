@@ -18,6 +18,7 @@ from moodle_scraper.config import (
     prompt_for_credentials,
 )
 from moodle_scraper.cli import MoodleCLI
+from moodle_scraper.integrity import check_directory, write_report
 from moodle_scraper.utils import Logger
 
 
@@ -82,12 +83,46 @@ def parse_arguments() -> argparse.Namespace:
         default=None,
         help="Cookie de sesión 'MoodleSession' para login directo (bypass de SSO / Google / MS 365)"
     )
+    parser.add_argument(
+        "--check-links",
+        type=str,
+        metavar="DIR",
+        default=None,
+        help="Verifica los enlaces locales de un directorio de descargas y sale (no requiere login)"
+    )
 
     return parser.parse_args()
 
 
+def _run_link_check(root: Path) -> int:
+    """Verifica enlaces locales de un directorio sin autenticarse."""
+    root = root.expanduser().resolve()
+    if not root.exists() or not root.is_dir():
+        Logger.error(f"No existe el directorio a verificar: {root}")
+        return 1
+
+    issues = check_directory(root)
+    report_path = write_report(root, issues)
+
+    Logger.header("VERIFICACIÓN DE ENLACES LOCALES")
+    for issue in issues[:50]:
+        Logger.warn(issue.describe(root))
+    if len(issues) > 50:
+        Logger.warn(f"... y {len(issues) - 50} referencia(s) más en {report_path.name}")
+
+    if issues:
+        Logger.error(f"Se encontraron {len(issues)} referencia(s) rota(s). Reporte: {report_path}")
+        return 1
+
+    Logger.success(f"Todas las referencias locales existen. Reporte: {report_path}")
+    return 0
+
+
 def main() -> int:
     args = parse_arguments()
+
+    if args.check_links:
+        return _run_link_check(Path(args.check_links))
     
     # Cargar configuración desde .env / .conf
     config = load_config(env_path=args.env, conf_path=args.conf)

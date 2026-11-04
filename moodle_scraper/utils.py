@@ -170,6 +170,9 @@ def sanitize_filename(name: str, max_length: int = 150) -> str:
     if not name:
         return "sin_nombre"
     
+    # Normalizar a NFC para que los acentos combinados no generen nombres distintos
+    name = unicodedata.normalize("NFC", name)
+
     # Decodificar entidades HTML básicas si vinieron en el texto
     name = name.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"').replace("&#039;", "'")
     

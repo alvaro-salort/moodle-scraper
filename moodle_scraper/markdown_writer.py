@@ -8,6 +8,7 @@ import os
 import re
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional
+from urllib.parse import quote
 from bs4 import BeautifulSoup, NavigableString, Tag
 
 from moodle_scraper.parser import Course, CourseSection, CourseModule, FileItem
@@ -260,6 +261,8 @@ class CourseMarkdownWriter:
                     lines,
                     relative_images,
                     image_base_url,
+                    file_base_dir=output_file.parent / sec.relative_folder_path,
+                    output_dir=output_file.parent,
                 )
 
             lines.append("\n---\n")
@@ -310,6 +313,8 @@ class CourseMarkdownWriter:
                 lines,
                 relative_images,
                 image_base_url,
+                file_base_dir=output_file.parent,
+                output_dir=output_file.parent,
             )
 
         output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -324,6 +329,8 @@ class CourseMarkdownWriter:
         lines: List[str],
         image_paths: Optional[Mapping[str, str]] = None,
         image_base_url: Optional[str] = None,
+        file_base_dir: Optional[Path] = None,
+        output_dir: Optional[Path] = None,
     ) -> None:
         """Añade un módulo específico al flujo de líneas Markdown."""
         icons = {
@@ -379,7 +386,15 @@ class CourseMarkdownWriter:
             lines.append("**Archivos asociados:**")
             for f in mod.files:
                 size_str = f" ({f.size_hint})" if f.size_hint else ""
-                lines.append(f"- 📎 `{f.name}`{size_str}")
+                if f.local_name:
+                    local_path = (file_base_dir / f.local_name) if file_base_dir else Path(f.local_name)
+                    if output_dir:
+                        link = os.path.relpath(local_path, output_dir).replace(os.sep, "/")
+                    else:
+                        link = f.local_name
+                    lines.append(f"- 📎 [`{f.name}`]({quote(link, safe='/')}){size_str}")
+                else:
+                    lines.append(f"- ⚠ No descargado: `{f.name}`{size_str}")
             lines.append("")
 
     @staticmethod
@@ -392,6 +407,9 @@ class CourseMarkdownWriter:
             return {}
 
         return {
-            source: os.path.relpath(path, output_file.parent).replace(os.sep, "/")
+            source: quote(
+                os.path.relpath(path, output_file.parent).replace(os.sep, "/"),
+                safe="/",
+            )
             for source, path in image_paths.items()
         }

@@ -42,6 +42,10 @@ def test_sanitize_max_length():
     assert cleaned.endswith(".pdf")
 
 
+def test_sanitize_normalizes_combining_accents():
+    assert sanitize_filename("Co\u0301digo.pdf") == "Codigo.pdf"
+
+
 def test_format_bytes():
     assert format_bytes(500) == "500.00 B"
     assert format_bytes(1024) == "1.00 KB"
