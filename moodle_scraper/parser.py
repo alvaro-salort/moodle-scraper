@@ -23,6 +23,8 @@ class FileItem:
     section_name: str = ""
     source_module: str = ""
     local_name: str = ""
+    size_bytes: Optional[int] = None
+    timemodified: Optional[int] = None
 
 
 @dataclass
@@ -242,6 +244,7 @@ class MoodleParser:
                         f_url = make_absolute_url(base_url, f_url)
                         f_name = content_file.get("filename") or f_url.split("/")[-1].split("?")[0]
                         f_size = content_file.get("filesize")
+                        f_mtime = content_file.get("timemodified")
                         size_str = format_bytes(f_size) if f_size else None
                         
                         files.append(FileItem(
@@ -249,7 +252,9 @@ class MoodleParser:
                             url=f_url,
                             size_hint=size_str,
                             section_name=clean_title,
-                            source_module=clean_mod_name
+                            source_module=clean_mod_name,
+                            size_bytes=int(f_size) if f_size else None,
+                            timemodified=int(f_mtime) if f_mtime else None,
                         ))
 
                 modules.append(CourseModule(

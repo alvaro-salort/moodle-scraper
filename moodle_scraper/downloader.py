@@ -3,6 +3,7 @@ Módulo de Descarga: Descargas en streaming de 8KB, resolución de Content-Dispo
 anti-duplicados, reanudación y sanitización de rutas.
 """
 
+import hashlib
 import mimetypes
 import os
 import re
@@ -14,6 +15,7 @@ from urllib.parse import unquote, urlparse
 import requests
 
 from moodle_scraper.config import ScraperConfig
+from moodle_scraper.manifest import sha256_file
 from moodle_scraper.session import MoodleSession, MoodleAuthError
 from moodle_scraper.utils import Logger, sanitize_filename, format_bytes
 
@@ -143,6 +145,7 @@ class Downloader:
         filename_suffix: Optional[str] = None,
         allowed_content_prefix: Optional[str] = None,
         max_bytes: Optional[int] = None,
+        metadata_out: Optional[dict] = None,
     ) -> Tuple[bool, Optional[Path], str]:
         """
         Descarga un archivo con streaming en bloques de 8KB.
@@ -209,15 +212,28 @@ class Downloader:
             if total_bytes and local_size == total_bytes:
                 Logger.skip(f"{filename} ({format_bytes(local_size)}) ya existe completamente.")
                 response.close()
+                if metadata_out is not None:
+                    metadata_out.update({
+                        "url": url,
+                        "size": local_size,
+                        "sha256": sha256_file(target_path),
+                    })
                 return True, target_path, "Omitido por existencia previa (tamaño idéntico)"
             elif not total_bytes and local_size > 0:
                 Logger.skip(f"{filename} ({format_bytes(local_size)}) ya existe.")
                 response.close()
+                if metadata_out is not None:
+                    metadata_out.update({
+                        "url": url,
+                        "size": local_size,
+                        "sha256": sha256_file(target_path),
+                    })
                 return True, target_path, "Omitido por existencia previa"
 
         # Descarga en bloques de 8KB
         chunk_size = self.config.chunk_size
         downloaded_bytes = 0
+        hasher = hashlib.sha256() if metadata_out is not None else None
 
         info_tag = f" [{source_info}]" if source_info else ""
         Logger.info(f"Descargando: {filename}{info_tag} (Tamaño: {formatted_total})...")
@@ -227,6 +243,8 @@ class Downloader:
                 for chunk in response.iter_content(chunk_size=chunk_size):
                     if chunk:
                         downloaded_bytes += len(chunk)
+                        if hasher is not None:
+                            hasher.update(chunk)
                         if max_bytes is not None and downloaded_bytes > max_bytes:
                             raise _DownloadSizeExceeded(
                                 f"El archivo excede el tamaño máximo permitido ({format_bytes(max_bytes)})"
@@ -251,6 +269,12 @@ class Downloader:
                 temp_path.rename(target_path)
 
             Logger.success(f"Descargado: {filename} ({format_bytes(downloaded_bytes)})")
+            if metadata_out is not None:
+                metadata_out.update({
+                    "url": url,
+                    "size": downloaded_bytes,
+                    "sha256": hasher.hexdigest() if hasher is not None else "",
+                })
             return True, target_path, "Descargado correctamente"
 
         except _DownloadSizeExceeded as e:
