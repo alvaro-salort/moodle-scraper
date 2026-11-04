@@ -11,7 +11,7 @@ from typing import Dict, List, Mapping, Optional
 from bs4 import BeautifulSoup, NavigableString, Tag
 
 from moodle_scraper.parser import Course, CourseSection, CourseModule, FileItem
-from moodle_scraper.utils import Logger
+from moodle_scraper.utils import Logger, make_absolute_url
 
 
 def _create_soup(html: str) -> BeautifulSoup:
@@ -22,6 +22,28 @@ def _create_soup(html: str) -> BeautifulSoup:
         return BeautifulSoup(html, "html.parser")
 
 
+def extract_image_source(image: Tag) -> str:
+    """
+    Obtiene la URL real de una imagen, contemplando lazy-loading.
+    Prioriza src, luego data-src y finalmente el primer candidato de srcset.
+    Los data URI se usan sólo si no hay una URL alternativa.
+    """
+    inline_data_uri = ""
+    for attr in ("src", "data-src"):
+        value = (image.get(attr) or "").strip()
+        if not value:
+            continue
+        if value.startswith(("data:", "cid:")):
+            inline_data_uri = inline_data_uri or value
+            continue
+        return value
+
+    srcset = (image.get("srcset") or "").strip()
+    if srcset:
+        return srcset.split(",")[0].strip().split(" ")[0]
+    return inline_data_uri
+
+
 class MarkdownFormatter:
     """Convierte fragmentos de HTML de Moodle a texto Markdown limpio y formateado."""
 
@@ -30,6 +52,7 @@ class MarkdownFormatter:
         cls,
         html_str: str,
         image_paths: Optional[Mapping[str, str]] = None,
+        image_base_url: Optional[str] = None,
     ) -> str:
         """Transforma una cadena HTML en Markdown legible."""
         if not html_str or not html_str.strip():
@@ -41,10 +64,15 @@ class MarkdownFormatter:
         for tag in soup(["script", "style", "meta", "noscript", "svg"]):
             tag.decompose()
 
-        return cls._render_node(soup, image_paths or {}).strip()
+        return cls._render_node(soup, image_paths or {}, image_base_url).strip()
 
     @classmethod
-    def _render_node(cls, node, image_paths: Mapping[str, str]) -> str:
+    def _render_node(
+        cls,
+        node,
+        image_paths: Mapping[str, str],
+        image_base_url: Optional[str] = None,
+    ) -> str:
         """Renderiza recursivamente nodos del DOM a sintaxis Markdown."""
         if isinstance(node, NavigableString):
             text = str(node)
@@ -55,7 +83,9 @@ class MarkdownFormatter:
             return ""
 
         tag_name = node.name.lower()
-        children_text = "".join(cls._render_node(child, image_paths) for child in node.children)
+        children_text = "".join(
+            cls._render_node(child, image_paths, image_base_url) for child in node.children
+        )
 
         if tag_name in ["h1", "h2", "h3", "h4", "h5", "h6"]:
             level = int(tag_name[1])
@@ -99,7 +129,7 @@ class MarkdownFormatter:
         elif tag_name == "ul":
             items = []
             for li in node.find_all("li", recursive=False):
-                li_text = cls._render_node(li, image_paths).strip()
+                li_text = cls._render_node(li, image_paths, image_base_url).strip()
                 if li_text:
                     items.append(f"- {li_text}")
             return "\n" + "\n".join(items) + "\n" if items else ""
@@ -107,7 +137,7 @@ class MarkdownFormatter:
         elif tag_name == "ol":
             items = []
             for i, li in enumerate(node.find_all("li", recursive=False), 1):
-                li_text = cls._render_node(li, image_paths).strip()
+                li_text = cls._render_node(li, image_paths, image_base_url).strip()
                 if li_text:
                     items.append(f"{i}. {li_text}")
             return "\n" + "\n".join(items) + "\n" if items else ""
@@ -123,10 +153,11 @@ class MarkdownFormatter:
             return text
 
         elif tag_name == "img":
-            src = node.get("src", "")
+            src = extract_image_source(node)
             alt = node.get("alt", "imagen")
             if src:
-                local_path = image_paths.get(src, src)
+                lookup = make_absolute_url(image_base_url, src) if image_base_url else src
+                local_path = image_paths.get(lookup, src)
                 return f"![{alt}]({local_path})"
             return ""
 
@@ -177,12 +208,14 @@ class CourseMarkdownWriter:
         sections: List[CourseSection],
         output_file: Path,
         image_paths: Optional[Mapping[str, Path]] = None,
+        image_base_url: Optional[str] = None,
     ) -> None:
         """
         Genera notas_y_teoria_completa.md con todo el contenido textual,
         etiquetas y teoría explicativa organizada cronológicamente por secciones.
         """
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        relative_images = CourseMarkdownWriter._relative_image_paths(output_file, image_paths)
         lines = [
             f"# 📚 {course.name}",
             f"\n> **Moodle ITU UNCUYO** | *Documento generado automáticamente el {now}*",
@@ -208,7 +241,8 @@ class CourseMarkdownWriter:
             if sec.summary_html:
                 sec_md = MarkdownFormatter.html_to_markdown(
                     sec.summary_html,
-                    CourseMarkdownWriter._relative_image_paths(output_file, image_paths),
+                    relative_images,
+                    image_base_url,
                 )
                 if sec_md:
                     lines.append(f"{sec_md}\n")
@@ -224,7 +258,8 @@ class CourseMarkdownWriter:
                 CourseMarkdownWriter._append_module_to_lines(
                     mod,
                     lines,
-                    CourseMarkdownWriter._relative_image_paths(output_file, image_paths),
+                    relative_images,
+                    image_base_url,
                 )
 
             lines.append("\n---\n")
@@ -241,10 +276,12 @@ class CourseMarkdownWriter:
         section: CourseSection,
         output_file: Path,
         image_paths: Optional[Mapping[str, Path]] = None,
+        image_base_url: Optional[str] = None,
     ) -> None:
         """
         Genera resumen_tema.md dentro de la carpeta específica del tema.
         """
+        relative_images = CourseMarkdownWriter._relative_image_paths(output_file, image_paths)
         header_title = f"{section.parent_name} - {section.name}" if section.parent_name else section.name
         lines = [
             f"# 📖 {header_title}",
@@ -256,7 +293,8 @@ class CourseMarkdownWriter:
         if section.summary_html:
             sec_md = MarkdownFormatter.html_to_markdown(
                 section.summary_html,
-                CourseMarkdownWriter._relative_image_paths(output_file, image_paths),
+                relative_images,
+                image_base_url,
             )
             lines.append(f"{sec_md}\n")
         elif section.summary_text:
@@ -270,7 +308,8 @@ class CourseMarkdownWriter:
             CourseMarkdownWriter._append_module_to_lines(
                 mod,
                 lines,
-                CourseMarkdownWriter._relative_image_paths(output_file, image_paths),
+                relative_images,
+                image_base_url,
             )
 
         output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -284,6 +323,7 @@ class CourseMarkdownWriter:
         mod: CourseModule,
         lines: List[str],
         image_paths: Optional[Mapping[str, str]] = None,
+        image_base_url: Optional[str] = None,
     ) -> None:
         """Añade un módulo específico al flujo de líneas Markdown."""
         icons = {
@@ -304,7 +344,11 @@ class CourseMarkdownWriter:
 
         # Texto/HTML de etiquetas o contenido directo
         if mod.content_html:
-            content_md = MarkdownFormatter.html_to_markdown(mod.content_html, image_paths)
+            content_md = MarkdownFormatter.html_to_markdown(
+                mod.content_html,
+                image_paths,
+                image_base_url,
+            )
             if content_md:
                 lines.append(f"{content_md}\n")
         elif mod.content_text:
@@ -312,7 +356,11 @@ class CourseMarkdownWriter:
 
         # Descripción del recurso
         if mod.description_html:
-            desc_md = MarkdownFormatter.html_to_markdown(mod.description_html, image_paths)
+            desc_md = MarkdownFormatter.html_to_markdown(
+                mod.description_html,
+                image_paths,
+                image_base_url,
+            )
             if desc_md:
                 lines.append(f"**Descripción:**\n{desc_md}\n")
         elif mod.description_text:

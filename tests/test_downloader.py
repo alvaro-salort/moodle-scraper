@@ -78,3 +78,96 @@ def test_download_file_adds_suffix_before_extension(tmp_path):
     assert success is True
     assert path == tmp_path / "image-abc123.png"
     assert path.read_bytes() == b"data"
+
+
+def test_download_file_rejects_non_image_content_type(tmp_path):
+    downloader = _make_downloader()
+    response = MagicMock(spec=requests.Response)
+    response.headers = {
+        "Content-Type": "text/html; charset=utf-8",
+        "Content-Length": "100",
+    }
+    response.url = "https://moodle.test/pluginfile.php/1/image.png"
+    response.iter_content.return_value = [b"<html>login</html>"]
+    downloader.session.get.return_value = response
+
+    success, path, msg = downloader.download_file(
+        response.url,
+        tmp_path,
+        allowed_content_prefix="image/",
+    )
+
+    assert success is False
+    assert path is None
+    assert "Tipo de contenido no permitido" in msg
+    assert not (tmp_path / "image.png").exists()
+    response.close.assert_called_once()
+
+
+def test_download_file_accepts_octet_stream_for_image_extension(tmp_path):
+    downloader = _make_downloader()
+    response = MagicMock(spec=requests.Response)
+    response.headers = {
+        "Content-Type": "application/octet-stream",
+        "Content-Length": "4",
+    }
+    response.url = "https://moodle.test/pluginfile.php/1/image.png"
+    response.iter_content.return_value = [b"data"]
+    downloader.session.get.return_value = response
+
+    success, path, _ = downloader.download_file(
+        response.url,
+        tmp_path,
+        allowed_content_prefix="image/",
+    )
+
+    assert success is True
+    assert path == tmp_path / "image.png"
+
+
+def test_download_file_rejects_oversized_by_content_length(tmp_path):
+    downloader = _make_downloader()
+    response = MagicMock(spec=requests.Response)
+    response.headers = {
+        "Content-Type": "image/png",
+        "Content-Length": "100",
+    }
+    response.url = "https://moodle.test/pluginfile.php/1/image.png"
+    downloader.session.get.return_value = response
+
+    success, path, msg = downloader.download_file(
+        response.url,
+        tmp_path,
+        allowed_content_prefix="image/",
+        max_bytes=10,
+    )
+
+    assert success is False
+    assert path is None
+    assert "tamaño máximo" in msg
+    assert list(tmp_path.iterdir()) == []
+    response.close.assert_called_once()
+
+
+def test_download_file_rejects_oversized_while_streaming(tmp_path):
+    downloader = _make_downloader()
+    response = MagicMock(spec=requests.Response)
+    response.headers = {
+        "Content-Type": "image/png",
+        "Content-Disposition": 'inline; filename="image.png"',
+    }
+    response.url = "https://moodle.test/pluginfile.php/1/image.png"
+    response.iter_content.return_value = [b"0123456789ABCDEF"]
+    downloader.session.get.return_value = response
+
+    success, path, msg = downloader.download_file(
+        response.url,
+        tmp_path,
+        allowed_content_prefix="image/",
+        max_bytes=5,
+    )
+
+    assert success is False
+    assert path is None
+    assert "tamaño máximo" in msg
+    assert list(tmp_path.iterdir()) == []

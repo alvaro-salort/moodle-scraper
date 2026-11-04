@@ -6,7 +6,6 @@ anti-duplicados, reanudación y sanitización de rutas.
 import mimetypes
 import os
 import re
-import hashlib
 from pathlib import Path
 from typing import Optional, Tuple
 from urllib.parse import unquote, urlparse
@@ -16,6 +15,13 @@ import requests
 from moodle_scraper.config import ScraperConfig
 from moodle_scraper.session import MoodleSession
 from moodle_scraper.utils import Logger, sanitize_filename, format_bytes
+
+
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".ico", ".avif"}
+
+
+class _DownloadSizeExceeded(Exception):
+    """Se lanza cuando una descarga supera el tamaño máximo permitido."""
 
 
 class Downloader:
@@ -87,6 +93,21 @@ class Downloader:
 
         return clean_fallback
 
+    @staticmethod
+    def _is_content_type_allowed(
+        content_type: str,
+        url: str,
+        allowed_prefix: Optional[str],
+    ) -> bool:
+        """Valida el Content-Type, tolerando octet-stream cuando la URL parece una imagen."""
+        if not allowed_prefix:
+            return True
+        if content_type.startswith(allowed_prefix):
+            return True
+        if allowed_prefix == "image/" and content_type in ("", "application/octet-stream"):
+            return Path(urlparse(url).path).suffix.lower() in _IMAGE_EXTENSIONS
+        return False
+
     def download_file(
         self,
         url: str,
@@ -94,6 +115,8 @@ class Downloader:
         fallback_name: Optional[str] = None,
         source_info: str = "",
         filename_suffix: Optional[str] = None,
+        allowed_content_prefix: Optional[str] = None,
+        max_bytes: Optional[int] = None,
     ) -> Tuple[bool, Optional[Path], str]:
         """
         Descarga un archivo con streaming en bloques de 8KB.
@@ -109,6 +132,13 @@ class Downloader:
             Logger.error(f"Fallo al solicitar descarga de {url}: {e}")
             return False, None, f"Error de red: {e}"
 
+        # Validar el tipo de contenido antes de escribir nada en disco
+        content_type = response.headers.get("Content-Type", "").split(";")[0].strip().lower()
+        if not self._is_content_type_allowed(content_type, url, allowed_content_prefix):
+            response.close()
+            Logger.warn(f"Descarga omitida por tipo de contenido no permitido ({content_type or 'desconocido'}): {url}")
+            return False, None, f"Tipo de contenido no permitido: {content_type or 'desconocido'}"
+
         # Resolver el nombre final del archivo
         filename = self.resolve_filename(response, fallback_name)
         if filename_suffix:
@@ -121,6 +151,14 @@ class Downloader:
         content_length_header = response.headers.get("Content-Length")
         total_bytes = int(content_length_header) if content_length_header and content_length_header.isdigit() else None
         formatted_total = format_bytes(total_bytes) if total_bytes else "desconocido"
+
+        if max_bytes is not None and total_bytes is not None and total_bytes > max_bytes:
+            response.close()
+            Logger.warn(
+                f"Descarga omitida por tamaño excesivo "
+                f"({format_bytes(total_bytes)} > {format_bytes(max_bytes)}): {url}"
+            )
+            return False, None, f"El archivo excede el tamaño máximo permitido ({format_bytes(max_bytes)})"
 
         # Mecanismo Anti-Duplicados / Resumen
         if target_path.exists() and not self.config.overwrite_existing:
@@ -146,8 +184,12 @@ class Downloader:
             with open(temp_path, "wb") as f:
                 for chunk in response.iter_content(chunk_size=chunk_size):
                     if chunk:
-                        f.write(chunk)
                         downloaded_bytes += len(chunk)
+                        if max_bytes is not None and downloaded_bytes > max_bytes:
+                            raise _DownloadSizeExceeded(
+                                f"El archivo excede el tamaño máximo permitido ({format_bytes(max_bytes)})"
+                            )
+                        f.write(chunk)
 
             # Reemplazar atómicamente el archivo temporal por el definitivo
             if temp_path.exists():
@@ -157,6 +199,15 @@ class Downloader:
 
             Logger.success(f"Descargado: {filename} ({format_bytes(downloaded_bytes)})")
             return True, target_path, "Descargado correctamente"
+
+        except _DownloadSizeExceeded as e:
+            if temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except Exception:
+                    pass
+            Logger.error(f"Descarga cancelada: {e}: {url}")
+            return False, None, str(e)
 
         except Exception as e:
             if temp_path.exists():
