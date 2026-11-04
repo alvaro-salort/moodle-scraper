@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 from moodle_scraper.config import ScraperConfig
 from moodle_scraper.course_scraper import CourseProcessingStats, CourseScraper, _DownloadJob
+from moodle_scraper.manifest import RunManifest, sha256_file
 from moodle_scraper.parser import CourseModule, CourseSection, FileItem
 
 
@@ -190,3 +191,79 @@ def test_handle_download_result_uses_local_name_for_direct_resource(tmp_path):
     assert len(module.files) == 1
     assert module.files[0].name == "Recurso.pdf"
     assert module.files[0].local_name == "Recurso.pdf"
+
+
+def test_execute_download_jobs_skips_files_current_in_manifest(tmp_path):
+    scraper = _make_scraper()
+    url = "https://moodle.test/moodle/pluginfile.php/1/Presentacion.pdf"
+    local_path = tmp_path / "Presentacion.pdf"
+    local_path.write_bytes(b"datos")
+
+    manifest = RunManifest(tmp_path, course_id="1", course_name="Curso")
+    manifest.record(
+        url,
+        local_path,
+        size=local_path.stat().st_size,
+        sha256=sha256_file(local_path),
+        remote_size=local_path.stat().st_size,
+        remote_mtime=1700000000,
+    )
+    manifest.save()
+
+    file_item = FileItem(
+        name="Presentación.pdf",
+        url=url,
+        size_bytes=local_path.stat().st_size,
+        timemodified=1700000000,
+    )
+    module = CourseModule(id="mod-1", mod_type="resource", name="Recurso", files=[file_item])
+    job = _DownloadJob(
+        url=url,
+        dest_dir=tmp_path,
+        fallback_name="Presentación.pdf",
+        source_info="Recurso",
+        target_module=module,
+        target_file=file_item,
+        remote_size=local_path.stat().st_size,
+        remote_mtime=1700000000,
+    )
+    stats = CourseProcessingStats()
+
+    scraper._execute_download_jobs([job], stats, manifest)
+
+    scraper.downloader.download_file.assert_not_called()
+    assert stats.files_skipped == 1
+    assert file_item.local_name == "Presentacion.pdf"
+
+
+def test_execute_download_jobs_records_manifest_after_download(tmp_path):
+    scraper = _make_scraper()
+    url = "https://moodle.test/moodle/pluginfile.php/1/documento.pdf"
+    local_path = tmp_path / "documento.pdf"
+    local_path.write_bytes(b"datos")
+    scraper.downloader.download_file.return_value = (
+        True,
+        local_path,
+        "Descargado correctamente",
+    )
+
+    manifest = RunManifest(tmp_path, course_id="1", course_name="Curso")
+    file_item = FileItem(name="documento.pdf", url=url)
+    module = CourseModule(id="mod-1", mod_type="resource", name="Recurso", files=[file_item])
+    job = _DownloadJob(
+        url=url,
+        dest_dir=tmp_path,
+        fallback_name="documento.pdf",
+        source_info="Recurso",
+        target_module=module,
+        target_file=file_item,
+    )
+    stats = CourseProcessingStats()
+
+    scraper._execute_download_jobs([job], stats, manifest)
+
+    entry = manifest.get(url)
+    assert entry is not None
+    assert entry["status"] == "ok"
+    assert entry["size"] == 5
+    assert (tmp_path / "manifest.json").exists()

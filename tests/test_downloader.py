@@ -9,6 +9,7 @@ import requests
 
 from moodle_scraper.config import ScraperConfig
 from moodle_scraper.downloader import Downloader
+from moodle_scraper.manifest import sha256_file
 from moodle_scraper.session import MoodleAuthError, MoodleSession
 
 
@@ -254,3 +255,29 @@ def test_download_file_rejects_incomplete_download(tmp_path):
     assert path is None
     assert "incompleta" in msg
     assert list(tmp_path.iterdir()) == []
+
+
+def test_download_file_records_size_and_sha256(tmp_path):
+    downloader = _make_downloader()
+    response = MagicMock(spec=requests.Response)
+    response.headers = {
+        "Content-Type": "application/pdf",
+        "Content-Disposition": 'attachment; filename="documento.pdf"',
+        "Content-Length": "4",
+    }
+    response.url = "https://moodle.test/pluginfile.php/1/documento.pdf"
+    response.iter_content.return_value = [b"data"]
+    downloader.session.get.return_value = response
+    metadata = {}
+
+    success, path, _ = downloader.download_file(
+        response.url,
+        tmp_path,
+        metadata_out=metadata,
+    )
+
+    assert success is True
+    assert path is not None
+    assert metadata["size"] == 4
+    assert metadata["sha256"] == sha256_file(path)
+    assert metadata["url"] == response.url

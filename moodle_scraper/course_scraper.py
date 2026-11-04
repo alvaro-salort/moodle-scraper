@@ -15,6 +15,7 @@ from moodle_scraper.config import ScraperConfig
 from moodle_scraper.downloader import Downloader
 from moodle_scraper.integrity import check_directory, write_report
 from moodle_scraper.markdown_writer import CourseMarkdownWriter, extract_image_source
+from moodle_scraper.manifest import RunManifest
 from moodle_scraper.parser import Course, CourseSection, CourseModule, FileItem, MoodleParser
 from moodle_scraper.session import MoodleSession, MoodleAuthError
 from moodle_scraper.utils import Logger, sanitize_filename, make_absolute_url
@@ -45,8 +46,11 @@ class _DownloadJob:
     fallback_name: str
     source_info: str
     target_module: Optional[CourseModule] = None
+    target_file: Optional[FileItem] = None
     is_direct_resource: bool = False
     section_name: str = ""
+    remote_size: Optional[int] = None
+    remote_mtime: Optional[int] = None
 
 
 class CourseScraper:
@@ -72,6 +76,7 @@ class CourseScraper:
         # 1. Crear carpeta raíz del curso
         course_dir = self.config.download_dir / course.sanitized_name
         course_dir.mkdir(parents=True, exist_ok=True)
+        manifest = RunManifest(course_dir, course.id, course.name)
         Logger.info(f"Directorio local del curso: {course_dir}")
 
         sections: List[CourseSection] = []
@@ -233,7 +238,7 @@ class CourseScraper:
         for sec, sec_dir, download_jobs in section_jobs:
             # Ejecutar descargas de la sección (secuencial o paralelo según max_workers)
             if download_jobs:
-                self._execute_download_jobs(download_jobs, stats)
+                self._execute_download_jobs(download_jobs, stats, manifest)
 
             # Guardar resumen del tema si está habilitado
             if self.config.save_section_summaries:
@@ -241,6 +246,8 @@ class CourseScraper:
                 CourseMarkdownWriter.generate_section_summary(
                     course, sec, summary_path, image_paths, self.config.base_url
                 )
+
+        manifest.save()
 
         # 6. Guardar archivo consolidado de teoría del curso completo
         if self.config.save_consolidated_markdown:
@@ -454,10 +461,18 @@ class CourseScraper:
                     fallback_name=f.name,
                     source_info=f"Archivo de {mod.name}",
                     target_module=mod,
-                    section_name=section.name
+                    target_file=f,
+                    section_name=section.name,
+                    remote_size=f.size_bytes,
+                    remote_mtime=f.timemodified,
                 ))
 
-    def _execute_download_jobs(self, jobs: List[_DownloadJob], stats: CourseProcessingStats) -> None:
+    def _execute_download_jobs(
+        self,
+        jobs: List[_DownloadJob],
+        stats: CourseProcessingStats,
+        manifest: Optional[RunManifest] = None,
+    ) -> None:
         """Ejecuta los trabajos de descarga en paralelo o secuencial según la configuración."""
         # Deduplicar trabajos de descarga para evitar colisiones de concurrencia en el mismo archivo
         unique_jobs: List[_DownloadJob] = []
@@ -472,12 +487,46 @@ class CourseScraper:
         workers = max(1, self.config.max_workers)
 
         def _run_job(job: _DownloadJob) -> Tuple[bool, Optional[Path], str, _DownloadJob]:
+            if manifest is not None:
+                current_path = manifest.is_current(
+                    job.url,
+                    job.dest_dir,
+                    expected_size=job.remote_size,
+                    expected_mtime=job.remote_mtime,
+                )
+                if current_path is not None:
+                    return True, current_path, "Omitido por existencia previa (manifest)", job
+
+            metadata: dict = {}
             success, path, msg = self.downloader.download_file(
                 job.url,
                 job.dest_dir,
                 fallback_name=job.fallback_name,
-                source_info=job.source_info
+                source_info=job.source_info,
+                metadata_out=metadata,
             )
+
+            if manifest is not None:
+                if success and path:
+                    manifest.record(
+                        job.url,
+                        path,
+                        size=metadata.get("size", path.stat().st_size),
+                        sha256=metadata.get("sha256", ""),
+                        status="ok",
+                        remote_size=job.remote_size,
+                        remote_mtime=job.remote_mtime,
+                    )
+                else:
+                    manifest.record(
+                        job.url,
+                        status="error",
+                        error=msg,
+                        remote_size=job.remote_size,
+                        remote_mtime=job.remote_mtime,
+                        dest_dir=job.dest_dir,
+                    )
+
             return success, path, msg, job
 
         if workers > 1 and len(jobs) > 1:
@@ -497,6 +546,9 @@ class CourseScraper:
                 success, path, msg, job = _run_job(job)
                 self._handle_download_result(success, path, msg, job, stats)
 
+        if manifest is not None:
+            manifest.save()
+
     def _handle_download_result(
         self,
         success: bool,
@@ -515,6 +567,10 @@ class CourseScraper:
             if path and job.target_module:
                 # El nombre local resuelto es la fuente de verdad para los enlaces Markdown
                 matched = False
+                if job.target_file is not None:
+                    job.target_file.local_name = path.name
+                    matched = True
+
                 for file_item in job.target_module.files:
                     if file_item.url == job.url:
                         file_item.local_name = path.name

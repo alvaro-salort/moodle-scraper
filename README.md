@@ -33,7 +33,8 @@ Permite descargar automáticamente todos los recursos de estudio (PDFs, presenta
   - **Cortesía de Red y Rate Limiting:** Control de retardo (`--delay`) y reintentos adaptativos para proteger el servidor de la universidad.
   - Descarga en bloques de 8KB (`stream=True`) con archivos temporales `.part` para evitar corrupciones.
   - Resolución inteligente de nombres reales mediante cabeceras `Content-Disposition` (RFC 5987 / RFC 2616), URLs redirigidas y `Content-Type`.
-  - **Mecanismo Anti-Duplicados:** Omite descargas de archivos existentes con el mismo tamaño para reanudación instantánea sin consumo innecesario de ancho de banda.
+  - **Mecanismo Anti-Duplicados y Reanudación:** Omite archivos que ya coinciden con el `manifest.json` (tamaño, `timemodified` remoto y hash) sin re-descargarlos.
+  - **Manifest y Verificación:** Cada curso guarda `manifest.json` con URL, ruta local, tamaño, SHA-256, estado y metadatos remotos. `python main.py --verify DIR` revalida hashes y detecta archivos modificados o faltantes.
 - 📝 **Extracción Completa de Texto y Teoría a Markdown:**
   - **Títulos de sección:** Nombres limpios respetando la jerarquía del aula virtual.
   - **Etiquetas y avisos (`mod_label`):** Explicaciones de los profesores, notas y advertencias.
@@ -181,7 +182,14 @@ Genera `verificacion_enlaces.txt` dentro del directorio verificado y devuelve c�
 
 > Los Markdown usan el nombre local real del archivo descargado (no el nombre remoto) y codifican espacios/paréntesis en las rutas para que los enlaces sean resolubles.
 
-### 7. Códigos de Salida
+### 7. Verificar Manifest y Hashes
+Revalida que los archivos descargados sigan coincidiendo con su `manifest.json` (tamaño y SHA-256), sin iniciar sesión:
+```bash
+python main.py --verify ./downloads
+```
+Genera `verificacion_manifest.txt` y devuelve código de salida `1` si encuentra archivos faltantes, truncados o modificados.
+
+### 8. Códigos de Salida
 - `0`: todo correcto.
 - `1`: hubo fallos de archivos/imágenes o enlaces locales rotos.
 - `2`: la sesión de Moodle expiró durante el procesamiento.
