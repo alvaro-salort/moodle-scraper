@@ -74,6 +74,9 @@ class MoodleCLI:
             total_stats.files_downloaded += stats.files_downloaded
             total_stats.files_skipped += stats.files_skipped
             total_stats.files_failed += stats.files_failed
+            total_stats.images_downloaded += stats.images_downloaded
+            total_stats.images_skipped += stats.images_skipped
+            total_stats.images_failed += stats.images_failed
             total_stats.pages_extracted += stats.pages_extracted
             total_stats.sections_count += stats.sections_count
 
@@ -84,9 +87,13 @@ class MoodleCLI:
         print(f"{Colors.BOLD}{Colors.GREEN}✔ Cursos procesados: {len(selected_courses)}{Colors.RESET}")
         print(f"{Colors.BOLD}{Colors.CYAN}✔ Archivos nuevos descargados: {total_stats.files_downloaded}{Colors.RESET}")
         print(f"{Colors.BOLD}{Colors.YELLOW}✔ Archivos omitidos (ya existentes): {total_stats.files_skipped}{Colors.RESET}")
+        print(f"{Colors.BOLD}{Colors.CYAN}✔ Imágenes descargadas: {total_stats.images_downloaded}{Colors.RESET}")
+        print(f"{Colors.BOLD}{Colors.YELLOW}✔ Imágenes omitidas (ya existentes): {total_stats.images_skipped}{Colors.RESET}")
         print(f"{Colors.BOLD}{Colors.MAGENTA}✔ Páginas teóricas extraídas a Markdown: {total_stats.pages_extracted}{Colors.RESET}")
         if total_stats.files_failed > 0:
             print(f"{Colors.BOLD}{Colors.RED}✖ Errores en archivos: {total_stats.files_failed}{Colors.RESET}")
+        if total_stats.images_failed > 0:
+            print(f"{Colors.BOLD}{Colors.RED}✖ Errores en imágenes: {total_stats.images_failed}{Colors.RESET}")
         print(f"{Colors.BOLD}{Colors.WHITE}⏱ Tiempo total: {elapsed:.1f} segundos{Colors.RESET}")
         print(f"\n{Colors.GREEN}Archivos y teoría organizados en: {self.config.download_dir.resolve()}{Colors.RESET}\n")
 
