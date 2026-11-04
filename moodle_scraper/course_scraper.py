@@ -4,9 +4,11 @@ Orquestador de Procesamiento de Curso: Extrae contenidos, teoría, páginas y de
 
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
 from pathlib import Path
 from typing import List, Optional, Tuple
 import requests
+from bs4 import BeautifulSoup
 
 from moodle_scraper.config import ScraperConfig
 from moodle_scraper.downloader import Downloader
@@ -189,7 +191,8 @@ class CourseScraper:
         stats.sections_count = len(sections)
         Logger.info(f"Secciones totales a procesar: {len(sections)}")
 
-        # 4. Recorrer secciones, procesar actividades y descargar archivos
+        # 4. Procesar actividades y preparar las descargas de cada sección
+        section_jobs: List[Tuple[CourseSection, Path, List[_DownloadJob]]] = []
         for sec in sections:
             sec_display = f"{sec.parent_name} > {sec.name}" if sec.parent_name else sec.name
             Logger.section(sec_display)
@@ -201,6 +204,12 @@ class CourseScraper:
             for mod in sec.modules:
                 self._collect_module_jobs(mod, sec, sec_dir, download_jobs, stats)
 
+            section_jobs.append((sec, sec_dir, download_jobs))
+
+        image_paths = self._download_course_images(sections, course_dir)
+
+        # 5. Descargar archivos y guardar los resúmenes de cada sección
+        for sec, sec_dir, download_jobs in section_jobs:
             # Ejecutar descargas de la sección (secuencial o paralelo según max_workers)
             if download_jobs:
                 self._execute_download_jobs(download_jobs, stats)
@@ -208,14 +217,18 @@ class CourseScraper:
             # Guardar resumen del tema si está habilitado
             if self.config.save_section_summaries:
                 summary_path = sec_dir / "resumen_tema.md"
-                CourseMarkdownWriter.generate_section_summary(course, sec, summary_path)
+                CourseMarkdownWriter.generate_section_summary(
+                    course, sec, summary_path, image_paths
+                )
 
-        # 5. Guardar archivo consolidado de teoría del curso completo
+        # 6. Guardar archivo consolidado de teoría del curso completo
         if self.config.save_consolidated_markdown:
             consolidated_path = course_dir / "notas_y_teoria_completa.md"
-            CourseMarkdownWriter.generate_consolidated_markdown(course, sections, consolidated_path)
+            CourseMarkdownWriter.generate_consolidated_markdown(
+                course, sections, consolidated_path, image_paths
+            )
 
-        # 6. Reporte de resumen del curso
+        # 7. Reporte de resumen del curso
         Logger.info(
             f"Resumen de curso '{course.name}': "
             f"{stats.files_downloaded} descargados, "
@@ -224,6 +237,50 @@ class CourseScraper:
             f"{stats.pages_extracted} páginas de teoría procesadas."
         )
         return stats
+
+    def _download_course_images(
+        self,
+        sections: List[CourseSection],
+        course_dir: Path,
+    ) -> dict[str, Path]:
+        """Descarga imágenes embebidas y devuelve sus rutas locales."""
+        image_sources: dict[str, tuple[str, str]] = {}
+        for section in sections:
+            html_fragments = [section.summary_html]
+            for mod in section.modules:
+                html_fragments.extend([mod.content_html, mod.description_html])
+
+            for html in html_fragments:
+                if not html:
+                    continue
+                soup = BeautifulSoup(html, "html.parser")
+                for image in soup.find_all("img"):
+                    source = (image.get("src") or "").strip()
+                    if not source or source.startswith(("data:", "cid:")):
+                        continue
+                    absolute_url = make_absolute_url(self.config.base_url, source)
+                    image_sources.setdefault(
+                        absolute_url,
+                        (source, image.get("alt", "") or "imagen"),
+                    )
+
+        image_paths: dict[str, Path] = {}
+        image_dir = course_dir / "imagenes"
+        for image_url, (source, alt) in image_sources.items():
+            success, path, _ = self.downloader.download_file(
+                image_url,
+                image_dir,
+                fallback_name=alt,
+                source_info="Imagen embebida",
+                filename_suffix=hashlib.sha1(image_url.encode("utf-8")).hexdigest()[:10],
+            )
+            if success and path:
+                image_paths[image_url] = path
+                image_paths[source] = path
+            else:
+                Logger.warn(f"No se pudo descargar la imagen embebida: {image_url}")
+
+        return image_paths
 
     def _collect_module_jobs(
         self,

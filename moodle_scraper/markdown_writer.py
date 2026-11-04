@@ -4,9 +4,10 @@ generación de documentos consolidados de teoría y resúmenes por tema.
 """
 
 import datetime
+import os
 import re
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Mapping, Optional
 from bs4 import BeautifulSoup, NavigableString, Tag
 
 from moodle_scraper.parser import Course, CourseSection, CourseModule, FileItem
@@ -25,7 +26,11 @@ class MarkdownFormatter:
     """Convierte fragmentos de HTML de Moodle a texto Markdown limpio y formateado."""
 
     @classmethod
-    def html_to_markdown(cls, html_str: str) -> str:
+    def html_to_markdown(
+        cls,
+        html_str: str,
+        image_paths: Optional[Mapping[str, str]] = None,
+    ) -> str:
         """Transforma una cadena HTML en Markdown legible."""
         if not html_str or not html_str.strip():
             return ""
@@ -36,10 +41,10 @@ class MarkdownFormatter:
         for tag in soup(["script", "style", "meta", "noscript", "svg"]):
             tag.decompose()
 
-        return cls._render_node(soup).strip()
+        return cls._render_node(soup, image_paths or {}).strip()
 
     @classmethod
-    def _render_node(cls, node) -> str:
+    def _render_node(cls, node, image_paths: Mapping[str, str]) -> str:
         """Renderiza recursivamente nodos del DOM a sintaxis Markdown."""
         if isinstance(node, NavigableString):
             text = str(node)
@@ -50,7 +55,7 @@ class MarkdownFormatter:
             return ""
 
         tag_name = node.name.lower()
-        children_text = "".join(cls._render_node(child) for child in node.children)
+        children_text = "".join(cls._render_node(child, image_paths) for child in node.children)
 
         if tag_name in ["h1", "h2", "h3", "h4", "h5", "h6"]:
             level = int(tag_name[1])
@@ -94,7 +99,7 @@ class MarkdownFormatter:
         elif tag_name == "ul":
             items = []
             for li in node.find_all("li", recursive=False):
-                li_text = cls._render_node(li).strip()
+                li_text = cls._render_node(li, image_paths).strip()
                 if li_text:
                     items.append(f"- {li_text}")
             return "\n" + "\n".join(items) + "\n" if items else ""
@@ -102,7 +107,7 @@ class MarkdownFormatter:
         elif tag_name == "ol":
             items = []
             for i, li in enumerate(node.find_all("li", recursive=False), 1):
-                li_text = cls._render_node(li).strip()
+                li_text = cls._render_node(li, image_paths).strip()
                 if li_text:
                     items.append(f"{i}. {li_text}")
             return "\n" + "\n".join(items) + "\n" if items else ""
@@ -121,7 +126,8 @@ class MarkdownFormatter:
             src = node.get("src", "")
             alt = node.get("alt", "imagen")
             if src:
-                return f"![{alt}]({src})"
+                local_path = image_paths.get(src, src)
+                return f"![{alt}]({local_path})"
             return ""
 
         elif tag_name == "hr":
@@ -166,7 +172,12 @@ class CourseMarkdownWriter:
     """Escribe los archivos Markdown consolidados y resúmenes por tema."""
 
     @staticmethod
-    def generate_consolidated_markdown(course: Course, sections: List[CourseSection], output_file: Path) -> None:
+    def generate_consolidated_markdown(
+        course: Course,
+        sections: List[CourseSection],
+        output_file: Path,
+        image_paths: Optional[Mapping[str, Path]] = None,
+    ) -> None:
         """
         Genera notas_y_teoria_completa.md con todo el contenido textual,
         etiquetas y teoría explicativa organizada cronológicamente por secciones.
@@ -195,7 +206,10 @@ class CourseMarkdownWriter:
 
             # Resumen o texto introductorio de la sección
             if sec.summary_html:
-                sec_md = MarkdownFormatter.html_to_markdown(sec.summary_html)
+                sec_md = MarkdownFormatter.html_to_markdown(
+                    sec.summary_html,
+                    CourseMarkdownWriter._relative_image_paths(output_file, image_paths),
+                )
                 if sec_md:
                     lines.append(f"{sec_md}\n")
             elif sec.summary_text:
@@ -207,7 +221,11 @@ class CourseMarkdownWriter:
                 continue
 
             for mod in sec.modules:
-                CourseMarkdownWriter._append_module_to_lines(mod, lines)
+                CourseMarkdownWriter._append_module_to_lines(
+                    mod,
+                    lines,
+                    CourseMarkdownWriter._relative_image_paths(output_file, image_paths),
+                )
 
             lines.append("\n---\n")
 
@@ -218,7 +236,12 @@ class CourseMarkdownWriter:
         Logger.text_saved(f"{output_file.name} ({output_file.parent.name})")
 
     @staticmethod
-    def generate_section_summary(course: Course, section: CourseSection, output_file: Path) -> None:
+    def generate_section_summary(
+        course: Course,
+        section: CourseSection,
+        output_file: Path,
+        image_paths: Optional[Mapping[str, Path]] = None,
+    ) -> None:
         """
         Genera resumen_tema.md dentro de la carpeta específica del tema.
         """
@@ -231,7 +254,10 @@ class CourseMarkdownWriter:
         ]
 
         if section.summary_html:
-            sec_md = MarkdownFormatter.html_to_markdown(section.summary_html)
+            sec_md = MarkdownFormatter.html_to_markdown(
+                section.summary_html,
+                CourseMarkdownWriter._relative_image_paths(output_file, image_paths),
+            )
             lines.append(f"{sec_md}\n")
         elif section.summary_text:
             lines.append(f"{section.summary_text}\n")
@@ -241,7 +267,11 @@ class CourseMarkdownWriter:
         lines.append("### 📌 Contenidos y Actividades\n")
 
         for mod in section.modules:
-            CourseMarkdownWriter._append_module_to_lines(mod, lines)
+            CourseMarkdownWriter._append_module_to_lines(
+                mod,
+                lines,
+                CourseMarkdownWriter._relative_image_paths(output_file, image_paths),
+            )
 
         output_file.parent.mkdir(parents=True, exist_ok=True)
         with open(output_file, "w", encoding="utf-8") as f:
@@ -250,7 +280,11 @@ class CourseMarkdownWriter:
         Logger.text_saved(f"resumen_tema.md -> {output_file.parent.name}")
 
     @staticmethod
-    def _append_module_to_lines(mod: CourseModule, lines: List[str]) -> None:
+    def _append_module_to_lines(
+        mod: CourseModule,
+        lines: List[str],
+        image_paths: Optional[Mapping[str, str]] = None,
+    ) -> None:
         """Añade un módulo específico al flujo de líneas Markdown."""
         icons = {
             "resource": "📄 [Archivo]",
@@ -270,7 +304,7 @@ class CourseMarkdownWriter:
 
         # Texto/HTML de etiquetas o contenido directo
         if mod.content_html:
-            content_md = MarkdownFormatter.html_to_markdown(mod.content_html)
+            content_md = MarkdownFormatter.html_to_markdown(mod.content_html, image_paths)
             if content_md:
                 lines.append(f"{content_md}\n")
         elif mod.content_text:
@@ -278,7 +312,7 @@ class CourseMarkdownWriter:
 
         # Descripción del recurso
         if mod.description_html:
-            desc_md = MarkdownFormatter.html_to_markdown(mod.description_html)
+            desc_md = MarkdownFormatter.html_to_markdown(mod.description_html, image_paths)
             if desc_md:
                 lines.append(f"**Descripción:**\n{desc_md}\n")
         elif mod.description_text:
@@ -299,3 +333,17 @@ class CourseMarkdownWriter:
                 size_str = f" ({f.size_hint})" if f.size_hint else ""
                 lines.append(f"- 📎 `{f.name}`{size_str}")
             lines.append("")
+
+    @staticmethod
+    def _relative_image_paths(
+        output_file: Path,
+        image_paths: Optional[Mapping[str, Path]],
+    ) -> Dict[str, str]:
+        """Convierte rutas locales de imágenes a enlaces relativos al Markdown."""
+        if not image_paths:
+            return {}
+
+        return {
+            source: os.path.relpath(path, output_file.parent).replace(os.sep, "/")
+            for source, path in image_paths.items()
+        }

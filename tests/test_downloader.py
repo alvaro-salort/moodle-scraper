@@ -56,3 +56,25 @@ def test_resolve_filename_from_url_path():
 
     filename = downloader.resolve_filename(resp, fallback_name="Default")
     assert filename == "Presentacion.pdf"
+
+
+def test_download_file_adds_suffix_before_extension(tmp_path):
+    downloader = _make_downloader()
+    response = MagicMock(spec=requests.Response)
+    response.headers = {
+        "Content-Disposition": 'inline; filename="image.png"',
+        "Content-Length": "4",
+    }
+    response.url = "https://moodle.test/pluginfile.php/1/image.png"
+    response.iter_content.return_value = [b"data"]
+    downloader.session.get.return_value = response
+
+    success, path, _ = downloader.download_file(
+        response.url,
+        tmp_path,
+        filename_suffix="abc123",
+    )
+
+    assert success is True
+    assert path == tmp_path / "image-abc123.png"
+    assert path.read_bytes() == b"data"
