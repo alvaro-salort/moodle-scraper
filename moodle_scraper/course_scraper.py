@@ -7,15 +7,19 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 from pathlib import Path
 from typing import List, Optional, Tuple
+from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
 
 from moodle_scraper.config import ScraperConfig
 from moodle_scraper.downloader import Downloader
-from moodle_scraper.markdown_writer import CourseMarkdownWriter
+from moodle_scraper.markdown_writer import CourseMarkdownWriter, extract_image_source
 from moodle_scraper.parser import Course, CourseSection, CourseModule, FileItem, MoodleParser
 from moodle_scraper.session import MoodleSession
 from moodle_scraper.utils import Logger, sanitize_filename, make_absolute_url
+
+
+MAX_IMAGE_BYTES = 25 * 1024 * 1024
 
 
 @dataclass
@@ -24,6 +28,9 @@ class CourseProcessingStats:
     files_downloaded: int = 0
     files_skipped: int = 0
     files_failed: int = 0
+    images_downloaded: int = 0
+    images_skipped: int = 0
+    images_failed: int = 0
     pages_extracted: int = 0
     sections_count: int = 0
 
@@ -55,6 +62,9 @@ class CourseScraper:
         con fallback a crawling multi-pestaña por HTML.
         """
         stats = CourseProcessingStats()
+        course_view_url = course.url or make_absolute_url(
+            self.config.base_url, f"course/view.php?id={course.id}"
+        )
         Logger.course_header(course.name, course_index, total_courses)
 
         # 1. Crear carpeta raíz del curso
@@ -87,7 +97,6 @@ class CourseScraper:
 
         # 3. Estrategia B: Mapeo y Crawling HTML (soporte para pestañas onetopic, sub-páginas y secciones estándar)
         if not sections:
-            course_view_url = course.url or f"course/view.php?id={course.id}"
             try:
                 resp = self.session.get(course_view_url)
                 resp.raise_for_status()
@@ -206,7 +215,7 @@ class CourseScraper:
 
             section_jobs.append((sec, sec_dir, download_jobs))
 
-        image_paths = self._download_course_images(sections, course_dir)
+        image_paths = self._download_course_images(sections, course_dir, stats)
 
         # 5. Descargar archivos y guardar los resúmenes de cada sección
         for sec, sec_dir, download_jobs in section_jobs:
@@ -218,14 +227,14 @@ class CourseScraper:
             if self.config.save_section_summaries:
                 summary_path = sec_dir / "resumen_tema.md"
                 CourseMarkdownWriter.generate_section_summary(
-                    course, sec, summary_path, image_paths
+                    course, sec, summary_path, image_paths, self.config.base_url
                 )
 
         # 6. Guardar archivo consolidado de teoría del curso completo
         if self.config.save_consolidated_markdown:
             consolidated_path = course_dir / "notas_y_teoria_completa.md"
             CourseMarkdownWriter.generate_consolidated_markdown(
-                course, sections, consolidated_path, image_paths
+                course, sections, consolidated_path, image_paths, self.config.base_url
             )
 
         # 7. Reporte de resumen del curso
@@ -234,6 +243,8 @@ class CourseScraper:
             f"{stats.files_downloaded} descargados, "
             f"{stats.files_skipped} omitidos/existentes, "
             f"{stats.files_failed} errores, "
+            f"{stats.images_downloaded} imágenes descargadas "
+            f"({stats.images_skipped} omitidas, {stats.images_failed} fallidas), "
             f"{stats.pages_extracted} páginas de teoría procesadas."
         )
         return stats
@@ -242,42 +253,93 @@ class CourseScraper:
         self,
         sections: List[CourseSection],
         course_dir: Path,
+        stats: CourseProcessingStats,
     ) -> dict[str, Path]:
-        """Descarga imágenes embebidas y devuelve sus rutas locales."""
-        image_sources: dict[str, tuple[str, str]] = {}
-        for section in sections:
-            html_fragments = [section.summary_html]
-            for mod in section.modules:
-                html_fragments.extend([mod.content_html, mod.description_html])
+        """
+        Descarga las imágenes embebidas del mismo origen y devuelve un mapping
+        de URL absoluta normalizada a ruta local.
+        """
+        if not (self.config.save_section_summaries or self.config.save_consolidated_markdown):
+            return {}
 
-            for html in html_fragments:
-                if not html:
+        base_netloc = urlparse(self.config.base_url).netloc
+        image_sources: dict[str, str] = {}
+
+        def collect(html: str) -> None:
+            if not html:
+                return
+            soup = BeautifulSoup(html, "lxml")
+            for image in soup.find_all("img"):
+                source = extract_image_source(image)
+                if not source or source.startswith(("data:", "cid:")):
                     continue
-                soup = BeautifulSoup(html, "html.parser")
-                for image in soup.find_all("img"):
-                    source = (image.get("src") or "").strip()
-                    if not source or source.startswith(("data:", "cid:")):
-                        continue
-                    absolute_url = make_absolute_url(self.config.base_url, source)
-                    image_sources.setdefault(
-                        absolute_url,
-                        (source, image.get("alt", "") or "imagen"),
-                    )
 
-        image_paths: dict[str, Path] = {}
+                absolute_url = make_absolute_url(self.config.base_url, source)
+                parsed = urlparse(absolute_url)
+                if parsed.scheme not in ("http", "https"):
+                    continue
+                if parsed.netloc != base_netloc:
+                    Logger.info(f"Imagen externa omitida: {absolute_url}")
+                    continue
+
+                image_sources.setdefault(absolute_url, image.get("alt", "") or "imagen")
+
+        for section in sections:
+            collect(section.summary_html)
+            for mod in section.modules:
+                collect(mod.content_html)
+                collect(mod.description_html)
+
+        if not image_sources:
+            return {}
+
         image_dir = course_dir / "imagenes"
-        for image_url, (source, alt) in image_sources.items():
-            success, path, _ = self.downloader.download_file(
+        image_paths: dict[str, Path] = {}
+
+        def download(task: tuple[str, str]):
+            image_url, alt = task
+            suffix = hashlib.sha256(image_url.encode("utf-8")).hexdigest()[:12]
+            result = self.downloader.download_file(
                 image_url,
                 image_dir,
                 fallback_name=alt,
                 source_info="Imagen embebida",
-                filename_suffix=hashlib.sha1(image_url.encode("utf-8")).hexdigest()[:10],
+                filename_suffix=suffix,
+                allowed_content_prefix="image/",
+                max_bytes=MAX_IMAGE_BYTES,
             )
+            return image_url, result
+
+        tasks = list(image_sources.items())
+        workers = max(1, self.config.max_workers)
+        results = []
+
+        if workers > 1 and len(tasks) > 1:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = [executor.submit(download, task) for task in tasks]
+                for future in as_completed(futures):
+                    try:
+                        results.append(future.result())
+                    except Exception as e:
+                        stats.images_failed += 1
+                        Logger.error(f"Error inesperado al descargar imagen: {e}")
+        else:
+            for task in tasks:
+                try:
+                    results.append(download(task))
+                except Exception as e:
+                    stats.images_failed += 1
+                    Logger.error(f"Error inesperado al descargar imagen: {e}")
+
+        for image_url, (success, path, msg) in results:
             if success and path:
                 image_paths[image_url] = path
-                image_paths[source] = path
+                if "Omitido" in msg:
+                    stats.images_skipped += 1
+                else:
+                    stats.images_downloaded += 1
             else:
+                stats.images_failed += 1
                 Logger.warn(f"No se pudo descargar la imagen embebida: {image_url}")
 
         return image_paths

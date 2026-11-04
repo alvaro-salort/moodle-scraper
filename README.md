@@ -15,6 +15,7 @@ Permite descargar automáticamente todos los recursos de estudio (PDFs, presenta
   - Si `MOODLE_BASE_URL` no está definido, se solicita la URL de Moodle al iniciar el programa.
   - Si `MOODLE_USER` o `MOODLE_PASSWORD` no están definidos, se solicitan al iniciar el programa. La contraseña se introduce de forma oculta y no se guarda en archivos.
   - Las imágenes embebidas en el contenido se descargan en `imagenes/` dentro de cada curso y los archivos Markdown las enlazan localmente.
+  - Sólo se descargan imágenes del mismo host que `MOODLE_BASE_URL`; las externas quedan como enlace remoto. Se validan `Content-Type` y un tamaño máximo de 25 MB por imagen, y se soportan `data-src`/`srcset` (lazy-loading).
 - 🧭 **Mapeo Inteligente y Soporte Completo Onetopic (Árbol de Pestañas):**
   - Detección rápida mediante WebService AJAX y navegación HTML inteligente.
   - **Soporte Nativo de `format_onetopic` con Subtemas Jerárquicos:** Rastrea automáticamente las pestañas de nivel superior y descubre dinámicamente las subpestañas hijas (ej: `Módulo I -> Clase 1, Clase 2, Clase 3...`).
