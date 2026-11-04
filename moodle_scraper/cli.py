@@ -48,7 +48,11 @@ class MoodleCLI:
             return 1
 
         # 2. Descubrimiento de Cursos
-        self.discovered_courses = self.discover_enrolled_courses()
+        try:
+            self.discovered_courses = self.discover_enrolled_courses()
+        except MoodleAuthError as e:
+            Logger.error(str(e))
+            return 2
         if not self.discovered_courses:
             Logger.warn("No se encontraron cursos matriculados en la cuenta o la plataforma no los listó.")
             return 0
@@ -65,20 +69,25 @@ class MoodleCLI:
 
         Logger.header(f"INICIANDO DESCARGA DE {len(selected_courses)} CURSO(S)")
 
-        for idx, course in enumerate(selected_courses, 1):
-            stats = self.course_scraper.process_course(
-                course,
-                course_index=idx,
-                total_courses=len(selected_courses)
-            )
-            total_stats.files_downloaded += stats.files_downloaded
-            total_stats.files_skipped += stats.files_skipped
-            total_stats.files_failed += stats.files_failed
-            total_stats.images_downloaded += stats.images_downloaded
-            total_stats.images_skipped += stats.images_skipped
-            total_stats.images_failed += stats.images_failed
-            total_stats.pages_extracted += stats.pages_extracted
-            total_stats.sections_count += stats.sections_count
+        try:
+            for idx, course in enumerate(selected_courses, 1):
+                stats = self.course_scraper.process_course(
+                    course,
+                    course_index=idx,
+                    total_courses=len(selected_courses)
+                )
+                total_stats.files_downloaded += stats.files_downloaded
+                total_stats.files_skipped += stats.files_skipped
+                total_stats.files_failed += stats.files_failed
+                total_stats.images_downloaded += stats.images_downloaded
+                total_stats.images_skipped += stats.images_skipped
+                total_stats.images_failed += stats.images_failed
+                total_stats.pages_extracted += stats.pages_extracted
+                total_stats.sections_count += stats.sections_count
+                total_stats.links_broken += stats.links_broken
+        except MoodleAuthError as e:
+            Logger.error(str(e))
+            return 2
 
         elapsed = time.time() - start_time
 
@@ -94,9 +103,17 @@ class MoodleCLI:
             print(f"{Colors.BOLD}{Colors.RED}✖ Errores en archivos: {total_stats.files_failed}{Colors.RESET}")
         if total_stats.images_failed > 0:
             print(f"{Colors.BOLD}{Colors.RED}✖ Errores en imágenes: {total_stats.images_failed}{Colors.RESET}")
+        if total_stats.links_broken > 0:
+            print(f"{Colors.BOLD}{Colors.RED}✖ Enlaces locales rotos: {total_stats.links_broken}{Colors.RESET}")
         print(f"{Colors.BOLD}{Colors.WHITE}⏱ Tiempo total: {elapsed:.1f} segundos{Colors.RESET}")
         print(f"\n{Colors.GREEN}Archivos y teoría organizados en: {self.config.download_dir.resolve()}{Colors.RESET}\n")
 
+        if (
+            total_stats.files_failed > 0
+            or total_stats.images_failed > 0
+            or total_stats.links_broken > 0
+        ):
+            return 1
         return 0
 
     def discover_enrolled_courses(self) -> List[Course]:
@@ -128,6 +145,8 @@ class MoodleCLI:
                         courses_map[c.id] = c
                     if ajax_courses:
                         Logger.success(f"Se encontraron {len(ajax_courses)} cursos mediante la API de Moodle.")
+            except MoodleAuthError:
+                raise
             except Exception as e:
                 Logger.warn(f"No se pudo consultar el servicio AJAX de cursos: {e}")
 
@@ -139,8 +158,10 @@ class MoodleCLI:
                     html_courses = MoodleParser.parse_courses_from_html(resp.text, self.config.base_url)
                     for c in html_courses:
                         courses_map[c.id] = c
-            except Exception:
-                pass
+            except MoodleAuthError:
+                raise
+            except Exception as e:
+                Logger.warn(f"No se pudo leer my/courses.php: {e}")
 
         # Estrategia 3: my/ (Dashboard principal)
         if not courses_map:
@@ -150,8 +171,10 @@ class MoodleCLI:
                     html_courses = MoodleParser.parse_courses_from_html(resp.text, self.config.base_url)
                     for c in html_courses:
                         courses_map[c.id] = c
-            except Exception:
-                pass
+            except MoodleAuthError:
+                raise
+            except Exception as e:
+                Logger.warn(f"No se pudo leer el dashboard my/: {e}")
 
         courses = list(courses_map.values())
         courses.sort(key=lambda x: x.name)

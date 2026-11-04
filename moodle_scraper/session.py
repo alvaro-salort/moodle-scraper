@@ -7,7 +7,7 @@ import re
 import time
 import requests
 from typing import Optional, Tuple
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
@@ -62,9 +62,26 @@ class MoodleSession:
             "Connection": "keep-alive"
         })
 
-        # Si se proporcionó una cookie de sesión directa, configurarla
+        # Si se proporcionó una cookie de sesión directa, configurarla acotada al host de Moodle
         if self.config.session_cookie:
-            self.session.cookies.set("MoodleSession", self.config.session_cookie)
+            parsed_base = urlparse(self.config.base_url)
+            cookie_kwargs = {
+                "path": "/",
+                "secure": parsed_base.scheme == "https",
+            }
+            if parsed_base.hostname:
+                cookie_kwargs["domain"] = parsed_base.hostname
+            self.session.cookies.set("MoodleSession", self.config.session_cookie, **cookie_kwargs)
+
+    @staticmethod
+    def is_login_url(url: str) -> bool:
+        """Indica si una URL corresponde a la página de login de Moodle."""
+        path = urlparse(url or "").path.lower().rstrip("/")
+        return path == "/login/index.php" or path.endswith("/login/index.php")
+
+    def is_login_response(self, response: requests.Response) -> bool:
+        """Indica si la respuesta terminó en la página de login (sesión expirada)."""
+        return self.is_login_url(getattr(response, "url", ""))
 
     def _resolve_url(self, endpoint: str) -> str:
         """Construye una URL absoluta a partir de un endpoint relativo."""
@@ -131,7 +148,7 @@ class MoodleSession:
             user_disp = self.user_fullname or "Sesión SSO"
             Logger.success(f"Autenticación exitosa mediante cookie! Conectado como: {user_disp}")
             if self.sesskey:
-                Logger.info(f"Clave de sesión (sesskey) obtenida: {self.sesskey}")
+                Logger.info("Clave de sesión (sesskey) obtenida")
             return True
 
         # B) Autenticación tradicional mediante usuario y contraseña
@@ -189,7 +206,7 @@ class MoodleSession:
 
         Logger.success(f"Autenticación exitosa! Sesión iniciada como: {self.user_fullname or user}")
         if self.sesskey:
-            Logger.info(f"Clave de sesión (sesskey) obtenida: {self.sesskey}")
+            Logger.info("Clave de sesión (sesskey) obtenida")
 
         return True
 
@@ -229,7 +246,13 @@ class MoodleSession:
             time.sleep(self.config.request_delay)
         target_url = self._resolve_url(url_or_endpoint)
         kwargs.setdefault("timeout", self.config.timeout)
-        return self.session.get(target_url, **kwargs)
+        response = self.session.get(target_url, **kwargs)
+        if self.is_authenticated and self.is_login_response(response):
+            response.close()
+            raise MoodleAuthError(
+                "La sesión de Moodle expiró o fue invalidada. Volvé a iniciar sesión."
+            )
+        return response
 
     def post(self, url_or_endpoint: str, **kwargs) -> requests.Response:
         """Petición POST envuelta con URL resolution, control de retardo y timeout por defecto."""
@@ -237,4 +260,10 @@ class MoodleSession:
             time.sleep(self.config.request_delay)
         target_url = self._resolve_url(url_or_endpoint)
         kwargs.setdefault("timeout", self.config.timeout)
-        return self.session.post(target_url, **kwargs)
+        response = self.session.post(target_url, **kwargs)
+        if self.is_authenticated and self.is_login_response(response):
+            response.close()
+            raise MoodleAuthError(
+                "La sesión de Moodle expiró o fue invalidada. Volvé a iniciar sesión."
+            )
+        return response

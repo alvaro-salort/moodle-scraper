@@ -45,8 +45,20 @@ def test_prompt_for_missing_credentials():
 
     assert config.user == "usuario"
     assert config.password == "secreto"
-    input_func.assert_called_once_with("Usuario de Moodle: ")
+    input_func.assert_called_once_with("Usuario de Moodle (Enter para usar cookie de sesión): ")
     password_func.assert_called_once_with("Contraseña de Moodle: ")
+
+
+def test_prompt_falls_back_to_session_cookie():
+    input_func = Mock(return_value="")
+    password_func = Mock(return_value="cookie-secreta")
+    config = ScraperConfig()
+
+    prompt_for_credentials(config, input_func, password_func)
+
+    assert config.user == ""
+    assert config.session_cookie == "cookie-secreta"
+    password_func.assert_called_once_with("Cookie MoodleSession: ")
 
 
 def test_prompt_does_not_replace_configured_credentials():

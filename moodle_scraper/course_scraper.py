@@ -16,7 +16,7 @@ from moodle_scraper.downloader import Downloader
 from moodle_scraper.integrity import check_directory, write_report
 from moodle_scraper.markdown_writer import CourseMarkdownWriter, extract_image_source
 from moodle_scraper.parser import Course, CourseSection, CourseModule, FileItem, MoodleParser
-from moodle_scraper.session import MoodleSession
+from moodle_scraper.session import MoodleSession, MoodleAuthError
 from moodle_scraper.utils import Logger, sanitize_filename, make_absolute_url
 
 
@@ -34,6 +34,7 @@ class CourseProcessingStats:
     images_failed: int = 0
     pages_extracted: int = 0
     sections_count: int = 0
+    links_broken: int = 0
 
 
 @dataclass
@@ -93,6 +94,8 @@ class CourseScraper:
                     if sections:
                         total_mods = sum(len(s.modules) for s in sections)
                         Logger.success(f"Estructura completa obtenida vía API Moodle ({len(sections)} secciones, {total_mods} actividades/recursos)")
+            except MoodleAuthError:
+                raise
             except Exception as e:
                 Logger.warn(f"No se pudo consultar el servicio AJAX de contenidos: {e}")
 
@@ -133,6 +136,8 @@ class CourseScraper:
                                     if s.id not in seen_sec_ids:
                                         seen_sec_ids.add(s.id)
                                         sections.append(s)
+                        except MoodleAuthError:
+                            raise
                         except Exception as e:
                             Logger.warn(f"No se pudo cargar pestaña {l0.get('title')}: {e}")
                     else:
@@ -168,8 +173,12 @@ class CourseScraper:
                                                 if s.id not in seen_sec_ids:
                                                     seen_sec_ids.add(s.id)
                                                     sections.append(s)
+                                    except MoodleAuthError:
+                                        raise
                                     except Exception as e:
                                         Logger.warn(f"No se pudo cargar subtema {parent_title} > {l1.title}: {e}")
+                        except MoodleAuthError:
+                            raise
                         except Exception as e:
                             Logger.warn(f"No se pudo cargar pestaña padre {parent_title}: {e}")
 
@@ -193,6 +202,8 @@ class CourseScraper:
                                     if s.id not in seen_sec_ids:
                                         seen_sec_ids.add(s.id)
                                         sections.append(s)
+                        except MoodleAuthError:
+                            raise
                         except Exception as e:
                             Logger.warn(f"No se pudo cargar pestaña {sec_title} ({tab_url}): {e}")
                 else:
@@ -241,6 +252,7 @@ class CourseScraper:
         # 7. Verificar que los Markdown no referencien archivos inexistentes
         link_issues = check_directory(course_dir)
         report_path = write_report(course_dir, link_issues)
+        stats.links_broken = len(link_issues)
         if link_issues:
             Logger.warn(
                 f"Verificación de enlaces: {len(link_issues)} referencia(s) rota(s). "
@@ -257,6 +269,7 @@ class CourseScraper:
             f"{stats.files_failed} errores, "
             f"{stats.images_downloaded} imágenes descargadas "
             f"({stats.images_skipped} omitidas, {stats.images_failed} fallidas), "
+            f"{stats.links_broken} enlaces rotos, "
             f"{stats.pages_extracted} páginas de teoría procesadas."
         )
         return stats
@@ -332,6 +345,8 @@ class CourseScraper:
                 for future in as_completed(futures):
                     try:
                         results.append(future.result())
+                    except MoodleAuthError:
+                        raise
                     except Exception as e:
                         stats.images_failed += 1
                         Logger.error(f"Error inesperado al descargar imagen: {e}")
@@ -339,6 +354,8 @@ class CourseScraper:
             for task in tasks:
                 try:
                     results.append(download(task))
+                except MoodleAuthError:
+                    raise
                 except Exception as e:
                     stats.images_failed += 1
                     Logger.error(f"Error inesperado al descargar imagen: {e}")
@@ -376,6 +393,8 @@ class CourseScraper:
                     mod.content_text = page_data.get("text", "")
                     stats.pages_extracted += 1
                     Logger.info(f"Página teórica extraída: {mod.name}")
+            except MoodleAuthError:
+                raise
             except Exception as e:
                 Logger.warn(f"No se pudo obtener el contenido de la página {mod.name}: {e}")
 
@@ -388,6 +407,8 @@ class CourseScraper:
                     if ext_url:
                         mod.external_url = ext_url
                         Logger.info(f"Enlace externo resuelto: {mod.name} -> {ext_url}")
+            except MoodleAuthError:
+                raise
             except Exception as e:
                 Logger.warn(f"No se pudo resolver URL externa {mod.name}: {e}")
 
@@ -403,6 +424,8 @@ class CourseScraper:
                         mod.name
                     )
                     mod.files.extend(folder_files)
+            except MoodleAuthError:
+                raise
             except Exception as e:
                 Logger.error(f"Error procesando carpeta {mod.name}: {e}")
 
@@ -464,6 +487,8 @@ class CourseScraper:
                     try:
                         success, path, msg, job = future.result()
                         self._handle_download_result(success, path, msg, job, stats)
+                    except MoodleAuthError:
+                        raise
                     except Exception as e:
                         Logger.error(f"Error inesperado en descarga concurrente: {e}")
                         stats.files_failed += 1

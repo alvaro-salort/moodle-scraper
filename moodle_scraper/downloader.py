@@ -14,7 +14,7 @@ from urllib.parse import unquote, urlparse
 import requests
 
 from moodle_scraper.config import ScraperConfig
-from moodle_scraper.session import MoodleSession
+from moodle_scraper.session import MoodleSession, MoodleAuthError
 from moodle_scraper.utils import Logger, sanitize_filename, format_bytes
 
 
@@ -44,6 +44,10 @@ def _repair_text(value: str) -> str:
 
 class _DownloadSizeExceeded(Exception):
     """Se lanza cuando una descarga supera el tamaño máximo permitido."""
+
+
+class _DownloadIncomplete(Exception):
+    """Se lanza cuando los bytes descargados no coinciden con Content-Length."""
 
 
 class Downloader:
@@ -154,6 +158,13 @@ class Downloader:
             Logger.error(f"Fallo al solicitar descarga de {url}: {e}")
             return False, None, f"Error de red: {e}"
 
+        # Si Moodle redirigió al login, la sesión expiró: no guardar HTML como archivo
+        if isinstance(self.session, MoodleSession) and self.session.is_login_response(response):
+            response.close()
+            raise MoodleAuthError(
+                "La sesión de Moodle expiró durante la descarga. Volvé a iniciar sesión."
+            )
+
         # Validar el tipo de contenido antes de escribir nada en disco
         content_type = response.headers.get("Content-Type", "").split(";")[0].strip().lower()
         if not self._is_content_type_allowed(content_type, url, allowed_content_prefix):
@@ -168,6 +179,15 @@ class Downloader:
             filename = f"{path.stem}-{sanitize_filename(filename_suffix)}{path.suffix}"
         target_path = dest_dir / filename
         temp_path = dest_dir / f"{filename}.part"
+
+        # Un HTML inesperado suele ser la página de login o un error de Moodle
+        if (
+            content_type.startswith("text/html")
+            and target_path.suffix.lower() not in (".html", ".htm")
+        ):
+            response.close()
+            Logger.warn(f"Se recibió HTML en lugar de un archivo descargable: {url}")
+            return False, None, "La respuesta es HTML y no un archivo descargable (¿sesión expirada?)"
 
         # Obtener tamaño reportado por el servidor
         content_length_header = response.headers.get("Content-Length")
@@ -213,6 +233,17 @@ class Downloader:
                             )
                         f.write(chunk)
 
+            # Verificar que no se haya truncado la descarga
+            if (
+                total_bytes is not None
+                and not response.headers.get("Content-Encoding")
+                and downloaded_bytes != total_bytes
+            ):
+                raise _DownloadIncomplete(
+                    f"Descarga incompleta: {format_bytes(downloaded_bytes)} de "
+                    f"{format_bytes(total_bytes)}"
+                )
+
             # Reemplazar atómicamente el archivo temporal por el definitivo
             if temp_path.exists():
                 if target_path.exists():
@@ -229,6 +260,15 @@ class Downloader:
                 except Exception:
                     pass
             Logger.error(f"Descarga cancelada: {e}: {url}")
+            return False, None, str(e)
+
+        except _DownloadIncomplete as e:
+            if temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except Exception:
+                    pass
+            Logger.error(f"Descarga incompleta: {e}: {url}")
             return False, None, str(e)
 
         except Exception as e:

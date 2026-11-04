@@ -14,6 +14,7 @@ Permite descargar automáticamente todos los recursos de estudio (PDFs, presenta
   - **Soporte de Cookie de Sesión Directa (`MoodleSession`):** Permite conectarse directamente en entornos que utilizan Single Sign-On (Google Workspace, Microsoft 365 / Entra ID) o Captcha.
   - Si `MOODLE_BASE_URL` no está definido, se solicita la URL de Moodle al iniciar el programa.
   - Si `MOODLE_USER` o `MOODLE_PASSWORD` no están definidos, se solicitan al iniciar el programa. La contraseña se introduce de forma oculta y no se guarda en archivos.
+  - Para SSO (Google/Microsoft) se puede dejar el usuario vacío y pegar la cookie `MoodleSession` en el prompt oculto; también se acepta `MOODLE_SESSION_COOKIE` o `--cookie -` por stdin. La cookie se acota al host de Moodle y no se envía a otros dominios.
   - Las imágenes embebidas en el contenido se descargan en `imagenes/` dentro de cada curso y los archivos Markdown las enlazan localmente.
   - Sólo se descargan imágenes del mismo host que `MOODLE_BASE_URL`; las externas quedan como enlace remoto. Se validan `Content-Type` y un tamaño máximo de 25 MB por imagen, y se soportan `data-src`/`srcset` (lazy-loading).
 - 🧭 **Mapeo Inteligente y Soporte Completo Onetopic (Árbol de Pestañas):**
@@ -165,7 +166,7 @@ python main.py --filter "Hardware"
 ### 5. Parámetros Adicionales de Línea de Comandos
 - `-w`, `--workers 4`: Define el número de descargas simultáneas en paralelo (por defecto: `3`).
 - `--delay 0.5`: Añade una pausa de cortesía en segundos entre peticiones para proteger el servidor.
-- `--cookie "valor_moodlesession"`: Autentica directamente mediante cookie de sesión (evita login con credenciales / SSO).
+- `--cookie "valor_moodlesession"`: Autentica mediante cookie. Queda visible en el historial; preferí `--cookie -` (lee por stdin) o `MOODLE_SESSION_COOKIE`.
 - `--download-dir "C:/Mis_Materias"`: Especifica una carpeta de destino personalizada.
 - `--overwrite`: Fuerza la sobreescritura de archivos locales existentes.
 - `--env "ruta/a/otro.env"`: Carga un archivo `.env` específico.
@@ -179,6 +180,14 @@ python main.py --check-links ./downloads
 Genera `verificacion_enlaces.txt` dentro del directorio verificado y devuelve código de salida `1` si encuentra referencias rotas. La misma verificación se ejecuta automáticamente al finalizar cada curso.
 
 > Los Markdown usan el nombre local real del archivo descargado (no el nombre remoto) y codifican espacios/paréntesis en las rutas para que los enlaces sean resolubles.
+
+### 7. Códigos de Salida
+- `0`: todo correcto.
+- `1`: hubo fallos de archivos/imágenes o enlaces locales rotos.
+- `2`: la sesión de Moodle expiró durante el procesamiento.
+- `130`: interrumpido con `Ctrl+C`.
+
+Las descargas rechazan HTML inesperado (por ejemplo, la página de login) y verifican que los bytes recibidos coincidan con `Content-Length` antes de dar un archivo por bueno.
 
 ---
 
