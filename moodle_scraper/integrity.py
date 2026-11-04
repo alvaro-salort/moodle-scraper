@@ -12,6 +12,10 @@ from typing import Iterable, List
 from urllib.parse import unquote, urlparse
 
 _MARKDOWN_LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
+_BACKTICK_FILE_RE = re.compile(
+    r"`([^`\n]+\.(?:pdf|docx?|pptx?|xlsx?|zip|html?|txt|csv|sql|py|tf|yml|yaml|json|md|png|jpe?g|gif|webp|svg))`",
+    re.IGNORECASE,
+)
 _SKIP_MARKERS = ("no descargado",)
 
 
@@ -48,7 +52,9 @@ def check_markdown_file(markdown: Path) -> List[BrokenLink]:
         if any(marker in line.lower() for marker in _SKIP_MARKERS):
             continue
 
+        has_markdown_link = False
         for match in _MARKDOWN_LINK_RE.finditer(line):
+            has_markdown_link = True
             target = match.group(1).strip()
             if not target or _is_external(target):
                 continue
@@ -60,6 +66,18 @@ def check_markdown_file(markdown: Path) -> List[BrokenLink]:
             resolved = (markdown.parent / local_target).resolve()
             if not resolved.exists():
                 issues.append(BrokenLink(markdown, target, line_number))
+
+        # Compatibilidad con Markdown antiguos que listaban archivos entre backticks.
+        # El consolidado antiguo no incluía la ruta de la sección, así que sus
+        # backticks no son resolubles; los consolidados nuevos usan enlaces.
+        if not has_markdown_link and markdown.name != "notas_y_teoria_completa.md":
+            for match in _BACKTICK_FILE_RE.finditer(line):
+                target = match.group(1).strip()
+                if not target or _is_external(target):
+                    continue
+                resolved = (markdown.parent / target).resolve()
+                if not resolved.exists():
+                    issues.append(BrokenLink(markdown, target, line_number))
 
     return issues
 

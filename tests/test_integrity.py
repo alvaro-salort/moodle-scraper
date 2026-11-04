@@ -39,6 +39,16 @@ def test_check_markdown_file_decodes_percent_encoded_targets(tmp_path):
     assert check_markdown_file(markdown) == []
 
 
+def test_check_markdown_file_detects_legacy_backtick_references(tmp_path):
+    markdown = tmp_path / "resumen_tema.md"
+    markdown.write_text("- 📎 `Falta.pdf`\n", encoding="utf-8")
+
+    issues = check_markdown_file(markdown)
+
+    assert len(issues) == 1
+    assert issues[0].target == "Falta.pdf"
+
+
 def test_check_directory_ignores_failed_download_markers(tmp_path):
     markdown = tmp_path / "Tema 1" / "resumen_tema.md"
     markdown.parent.mkdir(parents=True)
