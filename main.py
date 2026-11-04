@@ -81,7 +81,11 @@ def parse_arguments() -> argparse.Namespace:
         "--cookie",
         type=str,
         default=None,
-        help="Cookie de sesión 'MoodleSession' para login directo (bypass de SSO / Google / MS 365)"
+        help=(
+            "Cookie de sesión 'MoodleSession' para login directo. "
+            "Preferí MOODLE_SESSION_COOKIE o el prompt interactivo; "
+            "usá '-' para leerla por stdin sin dejarla en el historial."
+        )
     )
     parser.add_argument(
         "--check-links",
@@ -137,7 +141,14 @@ def main() -> int:
     if args.delay is not None:
         config.request_delay = args.delay
     if args.cookie is not None:
-        config.session_cookie = args.cookie
+        if args.cookie == "-":
+            config.session_cookie = sys.stdin.readline().strip()
+        else:
+            config.session_cookie = args.cookie
+            Logger.warn(
+                "La cookie pasada por --cookie queda visible en el historial del shell. "
+                "Usá --cookie - o MOODLE_SESSION_COOKIE."
+            )
 
     try:
         Logger.header("MOODLE 4.x SCRAPER & TEORÍA EXTRACTOR - ITU UNCUYO")

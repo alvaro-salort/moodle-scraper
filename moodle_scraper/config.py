@@ -66,12 +66,20 @@ def prompt_for_credentials(
     input_func=input,
     password_func=getpass.getpass,
 ) -> None:
-    """Solicita credenciales faltantes sin mostrarlas en pantalla."""
+    """Solicita credenciales o cookie de sesión sin mostrarlas en pantalla."""
     if config.session_cookie:
         return
 
     if not config.user:
-        config.user = input_func("Usuario de Moodle: ").strip()
+        config.user = input_func(
+            "Usuario de Moodle (Enter para usar cookie de sesión): "
+        ).strip()
+
+    # SSO / Google / Microsoft: permitir pegar la cookie sin usar argumentos visibles
+    if not config.user:
+        config.session_cookie = password_func("Cookie MoodleSession: ").strip()
+        return
+
     if not config.password:
         config.password = password_func("Contraseña de Moodle: ")
 

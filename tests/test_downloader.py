@@ -2,12 +2,14 @@
 Pruebas unitarias para resolución de nombres de archivo y cabeceras Content-Disposition.
 """
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
+import pytest
 import requests
 
 from moodle_scraper.config import ScraperConfig
 from moodle_scraper.downloader import Downloader
+from moodle_scraper.session import MoodleAuthError, MoodleSession
 
 
 def _make_downloader():
@@ -195,4 +197,60 @@ def test_download_file_rejects_oversized_while_streaming(tmp_path):
     assert success is False
     assert path is None
     assert "tamaño máximo" in msg
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_download_file_rejects_html_when_a_binary_is_expected(tmp_path):
+    downloader = _make_downloader()
+    response = MagicMock(spec=requests.Response)
+    response.headers = {
+        "Content-Type": "text/html; charset=utf-8",
+        "Content-Disposition": 'attachment; filename="documento.pdf"',
+        "Content-Length": "100",
+    }
+    response.url = "https://moodle.test/pluginfile.php/1/documento.pdf"
+    downloader.session.get.return_value = response
+
+    success, path, msg = downloader.download_file(response.url, tmp_path)
+
+    assert success is False
+    assert path is None
+    assert "HTML" in msg
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_download_file_raises_when_moodle_redirects_to_login(tmp_path):
+    config = ScraperConfig(base_url="https://moodle.test/moodle/")
+    session = MoodleSession(config)
+    downloader = Downloader(session, config)
+
+    response = MagicMock(spec=requests.Response)
+    response.url = "https://moodle.test/moodle/login/index.php"
+    response.headers = {"Content-Type": "text/html"}
+    response.raise_for_status.return_value = None
+
+    with patch.object(session.session, "get", return_value=response):
+        with pytest.raises(MoodleAuthError):
+            downloader.download_file("https://moodle.test/moodle/pluginfile.php/1/a.pdf", tmp_path)
+
+    response.close.assert_called_once()
+
+
+def test_download_file_rejects_incomplete_download(tmp_path):
+    downloader = _make_downloader()
+    response = MagicMock(spec=requests.Response)
+    response.headers = {
+        "Content-Type": "application/pdf",
+        "Content-Disposition": 'attachment; filename="documento.pdf"',
+        "Content-Length": "100",
+    }
+    response.url = "https://moodle.test/pluginfile.php/1/documento.pdf"
+    response.iter_content.return_value = [b"corto"]
+    downloader.session.get.return_value = response
+
+    success, path, msg = downloader.download_file(response.url, tmp_path)
+
+    assert success is False
+    assert path is None
+    assert "incompleta" in msg
     assert list(tmp_path.iterdir()) == []

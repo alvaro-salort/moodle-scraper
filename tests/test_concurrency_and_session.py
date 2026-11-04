@@ -5,6 +5,7 @@ Pruebas unitarias para concurrencia, retardo de solicitudes y autenticación por
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from moodle_scraper.config import ScraperConfig
 from moodle_scraper.session import MoodleSession, MoodleAuthError
@@ -40,6 +41,69 @@ def test_session_cookie_login_success():
         assert session.is_authenticated is True
         assert session.sesskey == "test_sesskey_999"
         assert session.user_fullname == "Juan Perez"
+
+
+def test_session_cookie_is_scoped_to_moodle_host():
+    cfg = ScraperConfig(
+        base_url="https://moodle.test/moodle/",
+        session_cookie="secreto",
+    )
+    session = MoodleSession(cfg)
+
+    same_host = session.session.prepare_request(
+        requests.Request("GET", "https://moodle.test/moodle/my/")
+    )
+    other_host = session.session.prepare_request(
+        requests.Request("GET", "https://evil.test/x.png")
+    )
+
+    assert "MoodleSession=secreto" in same_host.headers.get("Cookie", "")
+    assert "MoodleSession" not in other_host.headers.get("Cookie", "")
+
+
+def test_login_does_not_log_sesskey(monkeypatch):
+    cfg = ScraperConfig(
+        base_url="https://moodle.test/moodle/",
+        session_cookie="valida",
+    )
+    session = MoodleSession(cfg)
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.url = "https://moodle.test/moodle/my/"
+    mock_resp.text = """
+    <html>
+        <div class="userbutton">Juan Perez</div>
+        <script>var M = {cfg: {sesskey: "sesskey_secreto_999"}};</script>
+    </html>
+    """
+    logged = []
+    monkeypatch.setattr(
+        "moodle_scraper.session.Logger.info",
+        lambda message: logged.append(message),
+    )
+
+    with patch.object(session.session, "get", return_value=mock_resp):
+        session.login()
+
+    assert session.sesskey == "sesskey_secreto_999"
+    assert all("sesskey_secreto_999" not in message for message in logged)
+
+
+def test_authenticated_request_detects_login_redirect():
+    cfg = ScraperConfig(
+        base_url="https://moodle.test/moodle/",
+        session_cookie="expirada",
+    )
+    session = MoodleSession(cfg)
+    session.is_authenticated = True
+    mock_resp = MagicMock()
+    mock_resp.url = "https://moodle.test/moodle/login/index.php"
+
+    with patch.object(session.session, "get", return_value=mock_resp):
+        with pytest.raises(MoodleAuthError):
+            session.get("course/view.php?id=1")
+
+    mock_resp.close.assert_called_once()
 
 
 def test_session_cookie_login_failure():
